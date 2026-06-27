@@ -7,14 +7,22 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
-	"github.com/teepin/teepin-core/pkg/sdk"
+	sdk "github.com/FlashbackAi/teepin-go/teepin"
 )
 
 func main() {
-	// Create client
+	// Get API key from environment variable
+	apiKey := os.Getenv("TEEPIN_API_KEY")
+	if apiKey == "" {
+		log.Fatal("TEEPIN_API_KEY environment variable is required")
+	}
+
+	// Create client with authentication
 	client := sdk.NewClient(sdk.Config{
 		BaseURL: "http://localhost:8080",
+		APIKey:  apiKey,
 	})
 
 	ctx := context.Background()

@@ -14,6 +14,15 @@ go get github.com/FlashbackAi/teepin-go/teepin
 
 ## Quick Start
 
+First, get your API key:
+```bash
+# Login to TEEPIN
+teepin auth login
+
+# Your API key is saved to ~/.teepin/credentials
+```
+
+Then use the SDK:
 ```go
 package main
 
@@ -21,15 +30,22 @@ import (
     "context"
     "fmt"
     "log"
+    "os"
 
     "github.com/FlashbackAi/teepin-go/teepin"
 )
 
 func main() {
-    // Create client
+    // Get API key from environment or file
+    apiKey := os.Getenv("TEEPIN_API_KEY")
+    if apiKey == "" {
+        log.Fatal("TEEPIN_API_KEY environment variable is required")
+    }
+
+    // Create authenticated client
     client := teepin.NewClient(teepin.Config{
         BaseURL: "http://localhost:8080",
-        APIKey:  "your-api-key", // Optional for now
+        APIKey:  apiKey,
     })
 
     ctx := context.Background()
@@ -234,13 +250,13 @@ go build ./teepin
 
 ## Roadmap
 
-### v0.2.0 (Coming Soon)
-- Authentication support (API keys, JWT)
-- Project/workspace management
-- Billing and usage APIs
-- Metrics and monitoring APIs
+### v0.2.0 (Current)
+- ✅ Authentication support (API keys)
+- ✅ Project/workspace management
+- 🚧 Billing and usage APIs
+- 🚧 Metrics and monitoring APIs
 
-### v0.3.0
+### v0.3.0 (Coming Soon)
 - Streaming logs
 - Real-time metrics
 - Automatic retries
