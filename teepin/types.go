@@ -1,25 +1,32 @@
 // Copyright 2026 TEEPIN Project
 // Licensed under the Apache License, Version 2.0
 
-package sdk
+package teepin
 
 import "time"
 
 // Instance represents a compute instance
 type Instance struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Image         string            `json:"image"`
-	Status        string            `json:"status"`
-	GPUVRAM       string            `json:"gpu_vram,omitempty"`
-	AllocatedVRAM string            `json:"allocated_vram,omitempty"`
-	CPUUnits      int               `json:"cpu_units"`
-	Memory        string            `json:"memory"`
-	Endpoint      string            `json:"endpoint,omitempty"`
-	InternalIP    string            `json:"internal_ip,omitempty"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
-	Labels        map[string]string `json:"labels,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Image         string `json:"image"`
+	Status        string `json:"status"`
+	GPUVRAM       string `json:"gpu_vram,omitempty"`       // requested VRAM
+	AllocatedVRAM string `json:"allocated_vram,omitempty"` // reserved and billed VRAM
+	// InstanceType is derived from the actual hardware, e.g. "gpu.h100.2g.20gb".
+	InstanceType string `json:"instance_type,omitempty"`
+	// PricePerHour is the hourly price for the allocated VRAM ($0.10/GB-hr).
+	PricePerHour float64 `json:"price_per_hour,omitempty"`
+	// AllocationNote explains the allocation when it exceeds the request
+	// (custom sizes round up to the smallest isolation unit that fits).
+	AllocationNote string            `json:"allocation_note,omitempty"`
+	CPUUnits       int               `json:"cpu_units"`
+	Memory         string            `json:"memory"`
+	Endpoint       string            `json:"endpoint,omitempty"`
+	InternalIP     string            `json:"internal_ip,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+	Labels         map[string]string `json:"labels,omitempty"`
 }
 
 // CreateInstanceRequest represents a request to create an instance
