@@ -24,10 +24,8 @@ func main() {
 		log.Fatal("usage: storage FILE")
 	}
 	file := os.Args[1]
-	client := teepin.NewClient(teepin.Config{
-		APIKey:  os.Getenv("TEEPIN_API_KEY"),
-		BaseURL: os.Getenv("TEEPIN_API_URL"), // empty: https://api.teepin.com
-	})
+	// Reads TEEPIN_API_KEY, and TEEPIN_BASE_URL (default https://api.teepin.com).
+	client := teepin.NewClient(teepin.Config{})
 	ctx := context.Background()
 	const bucket = "sdk-example-bucket"
 

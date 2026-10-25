@@ -21,6 +21,9 @@ type APIError struct {
 	// Code is the API's stable code, e.g. "object_not_found" (empty for the
 	// few answers that carry none).
 	Code string
+	// Type is the error's class on the inference API (OpenAI's envelope),
+	// e.g. "rate_limit_error"; empty elsewhere.
+	Type string
 	// Message is the API's sentence, safe to show a person.
 	Message string
 	// RequestID identifies the request in Teepin's logs, for support.
@@ -51,20 +54,44 @@ func decodeError(resp *http.Response) error {
 		}
 	}
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	var body struct {
-		Error       string `json:"error"`
-		Code        string `json:"code"`
-		DeleteAfter string `json:"delete_after"`
-	}
-	if json.Unmarshal(raw, &body) == nil && (body.Error != "" || body.Code != "") {
-		e.Message, e.Code = body.Error, body.Code
-		if t, err := time.Parse(time.RFC3339, body.DeleteAfter); err == nil {
-			e.DeleteAfter = &t
-		}
-	} else {
+	if !fillError(e, raw) {
 		e.Message = strings.TrimSpace(string(raw))
 	}
 	return e
+}
+
+// fillError reads an error body into e: the platform's {"error": "...",
+// "code": "..."} or the inference API's OpenAI envelope {"error": {"message",
+// "type", "code"}}. It reports whether the body was either.
+func fillError(e *APIError, raw []byte) bool {
+	var body struct {
+		Error       json.RawMessage `json:"error"`
+		Code        string          `json:"code"`
+		DeleteAfter string          `json:"delete_after"`
+	}
+	if json.Unmarshal(raw, &body) != nil {
+		return false
+	}
+	var envelope struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+	}
+	var message string
+	switch {
+	case json.Unmarshal(body.Error, &message) == nil:
+	case json.Unmarshal(body.Error, &envelope) == nil && (envelope.Message != "" || envelope.Code != ""):
+		e.Message, e.Type, e.Code = envelope.Message, envelope.Type, envelope.Code
+		return true
+	}
+	if message == "" && body.Code == "" {
+		return false
+	}
+	e.Message, e.Code = message, body.Code
+	if t, err := time.Parse(time.RFC3339, body.DeleteAfter); err == nil {
+		e.DeleteAfter = &t
+	}
+	return true
 }
 
 // ErrorCode is err's API code, or "" when err is not an API error.
@@ -106,6 +133,11 @@ func IsPreconditionFailed(err error) bool { return statusIs(err, http.StatusPrec
 func IsTooLarge(err error) bool {
 	return statusIs(err, http.StatusRequestEntityTooLarge) || ErrorCode(err) == "object_too_large"
 }
+
+// IsRateLimited reports a request refused for going over a limit (429):
+// requests per minute, or too many at once. APIError.RetryAfter says when
+// to try again; the client has already retried it Config.MaxRetries times.
+func IsRateLimited(err error) bool { return statusIs(err, http.StatusTooManyRequests) }
 
 // IsNoCredit reports an account without credit for a write (402).
 func IsNoCredit(err error) bool { return ErrorCode(err) == "insufficient_credit" }

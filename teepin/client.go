@@ -1,9 +1,12 @@
 // Copyright 2026 TEEPIN Project
 // Licensed under the Apache License, Version 2.0
 
-// Package teepin is the Go client for Teepin Web Services (TWS).
+// Package teepin is the Go client for Teepin Web Services (TWS): Teepin
+// Inference (AI models in confidential enclaves, OpenAI-compatible) and Teepin
+// Storage.
 //
-//	client := teepin.NewClient(teepin.Config{APIKey: os.Getenv("TEEPIN_API_KEY")})
+//	client := teepin.NewClient(teepin.Config{}) // reads TEEPIN_API_KEY and TEEPIN_BASE_URL
+//	resp, err := client.Inference.Chat(ctx, teepin.ChatRequest{Model: "teepin/glm-5.3", Messages: msgs})
 //	obj, err := client.Storage.UploadFile(ctx, "my-bucket", "videos/a.mp4", "a.mp4", nil)
 //
 // Requests that fail for a passing reason (the network, a busy server) are
@@ -22,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -51,14 +55,20 @@ type Client struct {
 	Instances *InstancesService
 	// Storage is Teepin Storage: buckets, objects and transfers.
 	Storage *StorageService
+	// Inference is Teepin Inference: models, chat completions (streamed or
+	// not) and confidential models' attestation.
+	Inference *InferenceService
 }
 
 // Config configures a Client. Only APIKey is usually needed.
 type Config struct {
-	// BaseURL is the API's address (default https://api.teepin.com).
+	// BaseURL is the API's address. Empty: the TEEPIN_BASE_URL environment
+	// variable, else https://api.teepin.com.
 	BaseURL string
 
-	// APIKey is a project API key (tpk_...). It names its project.
+	// APIKey is a project API key (tpk_...). It names its project. Empty: the
+	// TEEPIN_API_KEY environment variable (as OpenAI's SDKs read
+	// OPENAI_API_KEY). A value given here always wins over the environment.
 	APIKey string
 
 	// ProjectID chooses the project when APIKey is a signed-in session's
@@ -83,6 +93,12 @@ type Config struct {
 
 // NewClient makes a client.
 func NewClient(config Config) *Client {
+	if config.APIKey == "" {
+		config.APIKey = os.Getenv("TEEPIN_API_KEY")
+	}
+	if config.BaseURL == "" {
+		config.BaseURL = os.Getenv("TEEPIN_BASE_URL")
+	}
 	if config.BaseURL == "" {
 		config.BaseURL = DefaultBaseURL
 	}
@@ -114,6 +130,7 @@ func NewClient(config Config) *Client {
 	}
 	c.Instances = &InstancesService{client: c}
 	c.Storage = &StorageService{client: c}
+	c.Inference = &InferenceService{client: c}
 	return c
 }
 
@@ -139,6 +156,14 @@ const (
 	// retryUnsent: only when the server certainly did not act on it: it
 	// never arrived, or the server said it is busy and did nothing.
 	retryUnsent
+	// retryChat: a chat completion, which the API bills once the model has
+	// answered, even if the client has gone. Tried again only when it
+	// certainly did not bill: a 429, Teepin's own 5xx (its error envelope in
+	// the body: the API bills only after it has the model's answer), or a
+	// request that never left. Never after a timeout or a cut connection, a
+	// 504, or a 5xx from something in front of the API; never once a stream
+	// has begun.
+	retryChat
 )
 
 // request is one API call.
@@ -287,6 +312,17 @@ func (c *Client) retryable(r *request, err error) bool {
 	if !errors.As(err, &ae) {
 		return false
 	}
+	if r.mode == retryChat {
+		switch ae.StatusCode {
+		case http.StatusTooManyRequests:
+			return true
+		case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+			// Only the codes the API sends before it bills; an HTML 502 from a
+			// load balancer (no code) may come after the request was billed.
+			return unbilledChatCodes[ae.Code]
+		}
+		return false
+	}
 	switch ae.StatusCode {
 	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
 		// Busy, or credit could not be checked: nothing was done.
@@ -298,6 +334,15 @@ func (c *Client) retryable(r *request, err error) bool {
 		return r.mode == retrySafe
 	}
 	return false
+}
+
+// unbilledChatCodes are the inference API's 5xx codes that come before a chat
+// is billed (inference_handlers.go), so the chat may be sent again.
+var unbilledChatCodes = map[string]bool{
+	"internal_error":      true,
+	"upstream_error":      true,
+	"model_unavailable":   true,
+	"billing_unavailable": true,
 }
 
 // transportError is a request that got no HTTP answer.
