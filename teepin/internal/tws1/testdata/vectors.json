@@ -1,0 +1,194 @@
+{
+  "format": "TWS1",
+  "spec": "TEEPIN-STORAGE-DESIGN.md section 20.1; package doc of pkg/tws1",
+  "plaintext": "byte i of a plaintext of n bytes is i mod 251",
+  "salts": "each object's salt is given; to reproduce it, it is the first 32 bytes of SHA-256(\"tws1-vector/\u003cname\u003e\" | uint64 big-endian counter from 0)",
+  "objects": [
+    {
+      "name": "empty",
+      "data_key": "1e23dd7b3d8c82deeff1831f11bb33e7e15da9ded738dae0acb5ff1a131097c0",
+      "salt": "f676afd957e12044c62d2c1a7dad341fe20fa9bb9e5fbaffe3012d473852bef4",
+      "plaintext_size": 0,
+      "stored_size": 88,
+      "stored_sha256": "6a89626342c4108c3055bcf3cabd9e4931268d15297cd17aac4408ffd19cf41f",
+      "stored": "5457533101011000f676afd957e12044c62d2c1a7dad341fe20fa9bb9e5fbaffe3012d473852bef404cf039fa518c7b95e005d7654ff195b5d8f208f9edb4f8ead701737ff8db19581ca4aa76d738c004590d8bdd2e9d12b"
+    },
+    {
+      "name": "one-byte",
+      "data_key": "08392e3eea7bfa2b301caba4be411a9c6530ce3092e201add157beeaf31ee899",
+      "salt": "e12def568c390bbca9c632ae222d5062a7698eade486313e631369da12e9cad5",
+      "plaintext_size": 1,
+      "stored_size": 89,
+      "stored_sha256": "5a4e1499ed95412d7577c577ae0467a08ff03b66efa55e22c227c182f9142ab3",
+      "stored": "5457533101011000e12def568c390bbca9c632ae222d5062a7698eade486313e631369da12e9cad5a9f28daad9726fa5850923b5773b78558225296100fa735473d28b8682d37a2ff3f931621f059ef1956fef146dab192654"
+    },
+    {
+      "name": "one-full-segment",
+      "data_key": "5b4d74e91fb022970bc559e15a41c196ab6d6b6a37821645a57366a6505be9d6",
+      "salt": "26a97196b080019955c4c30405f1bf23f4320ed62445a0f2fe1c6d9a03fa860f",
+      "plaintext_size": 65536,
+      "stored_size": 65624,
+      "stored_sha256": "3bbb266695cc67f0fb2aa9d16b2582cd4f604721e6d3526b50fe2eba078facb8"
+    },
+    {
+      "name": "one-segment-plus-one",
+      "data_key": "09415277df2cd081c42a917c89a07e7624b3e10fbe23ca4fde3193efdc1fc23f",
+      "salt": "a0e8037fbe9a15bb00ff1366f21fe77852c9b713952c94356e99c88cfb73ea95",
+      "plaintext_size": 65537,
+      "stored_size": 65641,
+      "stored_sha256": "ea58073ceecab6da22ac208819e6b8c236f8dc79cc6b59340f66e9ceabe8a2fd"
+    },
+    {
+      "name": "three-segments",
+      "data_key": "553481cae83be1a40ea265e4fa307a839455546a4db1e102fa829987f26480a5",
+      "salt": "a72f77cc069ef545d9a0daee72bcd678a1d3f80b4ab08fd01b43e653884ee43a",
+      "plaintext_size": 135393,
+      "stored_size": 135513,
+      "stored_sha256": "d84b96ba18fd33d02b6cc7e0bfee4316a7a37318730b0595f84ef2c05ee1f495"
+    }
+  ],
+  "ranges": [
+    {
+      "object": "three-segments",
+      "offset": 0,
+      "length": 10,
+      "first_segment": 0,
+      "stored_offset": 72,
+      "stored_length": 65552,
+      "skip": 0
+    },
+    {
+      "object": "three-segments",
+      "offset": 65533,
+      "length": 6,
+      "first_segment": 0,
+      "stored_offset": 72,
+      "stored_length": 131104,
+      "skip": 65533
+    },
+    {
+      "object": "three-segments",
+      "offset": 131072,
+      "length": 4321,
+      "first_segment": 2,
+      "stored_offset": 131176,
+      "stored_length": 4337,
+      "skip": 0
+    },
+    {
+      "object": "one-segment-plus-one",
+      "offset": 65536,
+      "length": 1,
+      "first_segment": 1,
+      "stored_offset": 65624,
+      "stored_length": 17,
+      "skip": 0
+    },
+    {
+      "object": "empty",
+      "offset": 0,
+      "length": 0,
+      "first_segment": 0,
+      "stored_offset": 72,
+      "stored_length": 16,
+      "skip": 0
+    }
+  ],
+  "parts": [
+    {
+      "object": "three-segments",
+      "part_size": 65536,
+      "parts": [
+        {
+          "number": 1,
+          "plain_first": 0,
+          "plain_size": 65536,
+          "stored_first": 0,
+          "stored_size": 65624,
+          "stored_sha256": "4c865a9d4349e3e44366bd1a223f4b0fa7756eee0c82dad18b03b6f0887483a2",
+          "stored_md5": "1bc684e544405075326fc3f8acc4d371"
+        },
+        {
+          "number": 2,
+          "plain_first": 65536,
+          "plain_size": 65536,
+          "stored_first": 65624,
+          "stored_size": 65552,
+          "stored_sha256": "e04db728ddca3a2aaa78681b5e36c980b00f7f58e4053a507c2befe1cc869eee",
+          "stored_md5": "cc75b72168bfd792c4b3af0e6e5ef032"
+        },
+        {
+          "number": 3,
+          "plain_first": 131072,
+          "plain_size": 4321,
+          "stored_first": 131176,
+          "stored_size": 4337,
+          "stored_sha256": "a28e02afda53ebda176c109f67bcc54e373f1635c35e4d181c40a9f73c15c293",
+          "stored_md5": "72373d8e94dafc552ef4f39dab8c2f27"
+        }
+      ]
+    },
+    {
+      "object": "three-segments",
+      "part_size": 131072,
+      "parts": [
+        {
+          "number": 1,
+          "plain_first": 0,
+          "plain_size": 131072,
+          "stored_first": 0,
+          "stored_size": 131176,
+          "stored_sha256": "045f3976ddb0eb563b9340ef600966819d3d8debc592d76d418618a197caed19",
+          "stored_md5": "41aefc8d1a7191721d852857961f2116"
+        },
+        {
+          "number": 2,
+          "plain_first": 131072,
+          "plain_size": 4321,
+          "stored_first": 131176,
+          "stored_size": 4337,
+          "stored_sha256": "a28e02afda53ebda176c109f67bcc54e373f1635c35e4d181c40a9f73c15c293",
+          "stored_md5": "72373d8e94dafc552ef4f39dab8c2f27"
+        }
+      ]
+    }
+  ],
+  "wraps": [
+    {
+      "account_private_key": "0649dddfa6b64b9a535823c1a91a881b809519e1ca4af9ce9aab2924b03bc624",
+      "account_public_key": "840235adae4a5c2653c28e4f8f94022589c6eb37aff162294a2fa5bac55b520d",
+      "account_id": "509ed21ce81876cf1368e59eee48f268",
+      "object_id": "a42ff2d5b12769376138cf539b2b6bfb",
+      "info": "74656570696e2f747773312f64656b2f7631509ed21ce81876cf1368e59eee48f268a42ff2d5b12769376138cf539b2b6bfb",
+      "data_key": "08392e3eea7bfa2b301caba4be411a9c6530ce3092e201add157beeaf31ee899",
+      "wrapped": "b42c3e40407d2d4795c5750bd52e1deb33b5b42b0873021473f072c1b12ed2337713107e6eb6ea753b1aea9f1cc8db775e67963d1040ec4a2cdcb919e82b1dd7da46481cb594cffa5526c7d732b571d8"
+    }
+  ],
+  "pack": {
+    "object_ids": [
+      "aee02311e4e820c674c242c6e461a95a",
+      "d29a0b7e729483d07ae73751a40d95db"
+    ],
+    "objects": [
+      "5457533101011000f676afd957e12044c62d2c1a7dad341fe20fa9bb9e5fbaffe3012d473852bef404cf039fa518c7b95e005d7654ff195b5d8f208f9edb4f8ead701737ff8db19581ca4aa76d738c004590d8bdd2e9d12b",
+      "5457533101011000e12def568c390bbca9c632ae222d5062a7698eade486313e631369da12e9cad5a9f28daad9726fa5850923b5773b78558225296100fa735473d28b8682d37a2ff3f931621f059ef1956fef146dab192654"
+    ],
+    "offsets": [
+      64,
+      216
+    ],
+    "pack": "54504b31aee02311e4e820c674c242c6e461a95a00000000000000586a89626342c4108c3055bcf3cabd9e4931268d15297cd17aac4408ffd19cf41f000000005457533101011000f676afd957e12044c62d2c1a7dad341fe20fa9bb9e5fbaffe3012d473852bef404cf039fa518c7b95e005d7654ff195b5d8f208f9edb4f8ead701737ff8db19581ca4aa76d738c004590d8bdd2e9d12b54504b31d29a0b7e729483d07ae73751a40d95db00000000000000595a4e1499ed95412d7577c577ae0467a08ff03b66efa55e22c227c182f9142ab3000000005457533101011000e12def568c390bbca9c632ae222d5062a7698eade486313e631369da12e9cad5a9f28daad9726fa5850923b5773b78558225296100fa735473d28b8682d37a2ff3f931621f059ef1956fef146dab192654"
+  },
+  "rfc9180_a_1_1": {
+    "info": "4f6465206f6e2061204772656369616e2055726e",
+    "skRm": "4612c550263fc8ad58375df3f557aac531d26850903e55a9f23f21d8534e8ac8",
+    "pkRm": "3948cfe0ad1ddb695d780e59077195da6c56506b027329794ab02bca80815c4d",
+    "enc": "37fda3567bdbd628e88668c3c8d7e97d1d1253b6d4ea6d44c150f741f1bf4431",
+    "aad_0": "436f756e742d30",
+    "ct_0": "f938558b5d72f1a23810b4be2ab4f84331acc02fc97babc53a52ae8218a355a96d8770ac83d07bea87e13c512a",
+    "aad_1": "436f756e742d31",
+    "ct_1": "af2d7e9ac9ae7e270f46ba1f975be53c09f8d875bdc8535458c2494e8a6eab251c03d0c22a56b8ca42c2063b84",
+    "pt": "4265617574792069732074727574682c20747275746820626561757479",
+    "notes": "RFC 9180 appendix A.1.1; open encryptions 0 then 1 with skRm"
+  }
+}

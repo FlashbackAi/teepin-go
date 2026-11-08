@@ -2,7 +2,8 @@
 // Licensed under the Apache License, Version 2.0
 
 // Command storage shows Teepin Storage from Go: make a bucket, upload a file
-// of any size with progress, list, download, sign a link and clean up.
+// of any size with progress, list, download (each byte verified on this machine)
+// and clean up.
 //
 //	TEEPIN_API_KEY=tpk_... go run ./examples/storage ./some-file
 package main
@@ -14,7 +15,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/FlashbackAi/teepin-go/teepin"
 )
@@ -33,19 +33,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Files above 16 MiB go in parallel parts. Resume picks up an earlier
-	// upload of the same file that was cut off.
+	// The file is encrypted on this machine and sent straight to the storage
+	// network. Files above 16 MiB go in parallel parts, journaled, so a run
+	// cut off (a crash, a lost network) is finished by ResumeUploads.
 	key := "examples/" + filepath.Base(file)
 	obj, err := client.Storage.UploadFile(ctx, bucket, key, file, &teepin.UploadOptions{
-		Resume: true,
 		Progress: func(done, total int64) {
 			fmt.Printf("\ruploading %d of %d bytes", done, total)
 		},
 	})
 	fmt.Println()
+	var unavailable *teepin.StorageUnavailableError
 	switch {
 	case teepin.IsNoCredit(err):
 		log.Fatal("add credit in the console to store files")
+	case errors.As(err, &unavailable):
+		log.Fatal("storage is unavailable; run the example again later, or call ResumeUploads to finish the upload")
 	case err != nil:
 		log.Fatal(err)
 	}
@@ -66,12 +69,6 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Println("downloaded to", out)
-
-	link, err := client.Storage.PresignDownload(ctx, bucket, key, &teepin.PresignDownloadOptions{TTL: 10 * time.Minute})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("link for 10 minutes:", link.URL)
 
 	if err := client.Storage.DeleteObject(ctx, bucket, key); err != nil {
 		log.Fatal(err)

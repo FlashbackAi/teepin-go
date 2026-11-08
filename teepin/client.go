@@ -21,17 +21,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/FlashbackAi/teepin-go/teepin/internal/errs"
+	"github.com/FlashbackAi/teepin-go/teepin/internal/journal"
 )
 
 // Version is this SDK's version, sent in the User-Agent.
-const Version = "0.2.1"
+const Version = "0.3.0-rc.1"
 
 const (
 	// DefaultBaseURL is the public API.
@@ -50,6 +55,12 @@ type Client struct {
 	timeout    time.Duration
 	maxRetries int
 	sleep      func(context.Context, time.Duration) error // replaced in tests
+
+	// Direct storage (Config's fields of the same names, resolved).
+	keyCacheTTL       time.Duration // 0 keeps no key
+	uploadWait        time.Duration // 0 fails at once
+	uploadConcurrency int
+	stateDir          string
 
 	// Instances is GPU and CPU compute.
 	Instances *InstancesService
@@ -80,16 +91,77 @@ type Config struct {
 	// off a large transfer; Timeout bounds the other calls instead.
 	HTTPClient *http.Client
 
-	// Timeout bounds one API call that is not a transfer (default 60s).
+	// Timeout bounds one API call that is not a transfer. Zero means the
+	// default (60s); a negative value means none: such calls are bounded only
+	// by their context.
 	Timeout time.Duration
 
 	// MaxRetries is how many times a request that failed for a passing
-	// reason is tried again (default 4). Negative turns retries off.
+	// reason is tried again. Zero means the default (4); a negative value
+	// means none: retries are off.
 	MaxRetries int
 
 	// UserAgent is added in front of the SDK's own User-Agent.
 	UserAgent string
+
+	// KeyCacheTTL is how long a read keeps an object's data key in memory, so
+	// later reads of the same version needn't fetch it again. Zero means the
+	// default (10 minutes); a negative value means none: no key is kept after
+	// its read. Keys are zeroed when they expire, when they are replaced, and
+	// on Close.
+	KeyCacheTTL time.Duration
+
+	// UploadWait is how long an upload waits for an unavailable storage
+	// network before it fails. Zero means the default (TEEPIN_UPLOAD_WAIT in
+	// seconds, else 10 minutes); a negative value means none: an upload fails
+	// at once.
+	UploadWait time.Duration
+
+	// UploadConcurrency is the most packs or parts in flight at once; the SDK
+	// finds the best number below it. Zero or a negative value means the
+	// default (TEEPIN_UPLOAD_CONCURRENCY, else 32).
+	UploadConcurrency int
+
+	// StateDir is where upload and download runs keep their journals. Empty:
+	// TEEPIN_STATE_DIR, else this system's state directory
+	// (%LOCALAPPDATA%\teepin on Windows, ~/Library/Application Support/teepin
+	// on macOS, $XDG_STATE_HOME/teepin or ~/.local/state/teepin elsewhere).
+	StateDir string
 }
+
+// The defaults and environment variables of the direct storage fields, the
+// same as the Python SDK's.
+const (
+	defaultKeyCacheTTL       = 10 * time.Minute
+	defaultUploadWait        = 10 * time.Minute
+	defaultUploadConcurrency = 32
+	uploadWaitEnv            = "TEEPIN_UPLOAD_WAIT"
+	uploadConcurrencyEnv     = "TEEPIN_UPLOAD_CONCURRENCY"
+)
+
+// envSeconds is the environment variable name as a positive number of
+// seconds, or def when it is unset or not one.
+func envSeconds(name string, def time.Duration) time.Duration {
+	v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(name)), 64)
+	if err != nil || !(v > 0) || v > float64(math.MaxInt64)/float64(time.Second) {
+		return def
+	}
+	return time.Duration(v * float64(time.Second))
+}
+
+// envInt is the environment variable name as a positive whole number, or def.
+func envInt(name string, def int) int {
+	v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || v <= 0 {
+		return def
+	}
+	return v
+}
+
+// defaultStateDir is the state directory for this system (section 22.6), or
+// TEEPIN_STATE_DIR. The same place the Python and Node SDKs use; each keeps
+// its own runs there.
+func defaultStateDir() string { return journal.DefaultStateDir() }
 
 // NewClient makes a client.
 func NewClient(config Config) *Client {
@@ -127,6 +199,26 @@ func NewClient(config Config) *Client {
 		timeout:    config.Timeout,
 		maxRetries: config.MaxRetries,
 		sleep:      sleepCtx,
+		stateDir:   config.StateDir,
+	}
+	switch {
+	case config.KeyCacheTTL == 0:
+		c.keyCacheTTL = defaultKeyCacheTTL
+	case config.KeyCacheTTL > 0:
+		c.keyCacheTTL = config.KeyCacheTTL
+	}
+	switch {
+	case config.UploadWait == 0:
+		c.uploadWait = envSeconds(uploadWaitEnv, defaultUploadWait)
+	case config.UploadWait > 0:
+		c.uploadWait = config.UploadWait
+	}
+	c.uploadConcurrency = config.UploadConcurrency
+	if c.uploadConcurrency <= 0 {
+		c.uploadConcurrency = envInt(uploadConcurrencyEnv, defaultUploadConcurrency)
+	}
+	if c.stateDir == "" {
+		c.stateDir = defaultStateDir()
 	}
 	c.Instances = &InstancesService{client: c}
 	c.Storage = &StorageService{client: c}
@@ -136,6 +228,13 @@ func NewClient(config Config) *Client {
 
 // BaseURL is the API address the client talks to.
 func (c *Client) BaseURL() string { return c.baseURL }
+
+// Close zeroes the data keys storage reads keep in memory (Config.KeyCacheTTL).
+// The client still works afterwards: later reads fetch their keys again.
+func (c *Client) Close() error {
+	c.Storage.close()
+	return nil
+}
 
 func defaultTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
@@ -180,6 +279,8 @@ type request struct {
 	mode retryMode
 	// transfer calls are bounded by the caller's context, not Config.Timeout.
 	transfer bool
+	// noRetry sends it once, whatever its mode: a cleanup call while stopping.
+	noRetry bool
 	// attempt is set while sending, so a caller can tell a retry's answer.
 	attempt int
 }
@@ -202,7 +303,7 @@ func (c *Client) send(ctx context.Context, r *request) (*http.Response, error) {
 		if err == nil {
 			return resp, nil
 		}
-		if attempt >= c.maxRetries || !c.retryable(r, err) || ctx.Err() != nil {
+		if attempt >= c.maxRetries || r.noRetry || !c.retryable(r, err) || ctx.Err() != nil {
 			return nil, err
 		}
 		if serr := c.sleep(ctx, backoff(attempt, err)); serr != nil {
@@ -258,7 +359,7 @@ func (c *Client) sendOnce(ctx context.Context, r *request, payload []byte) (*htt
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &transportError{err: err, unsent: unsent(err)}
+		return nil, &transportError{Err: err, Unsent: unsent(err)}
 	}
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
@@ -303,10 +404,10 @@ func (c *Client) do(ctx context.Context, method, path string, body, result any) 
 func (c *Client) retryable(r *request, err error) bool {
 	var te *transportError
 	if errors.As(err, &te) {
-		if errors.Is(te.err, context.Canceled) || errors.Is(te.err, context.DeadlineExceeded) {
+		if errors.Is(te.Err, context.Canceled) || errors.Is(te.Err, context.DeadlineExceeded) {
 			return false
 		}
-		return r.mode == retrySafe || te.unsent
+		return r.mode == retrySafe || te.Unsent
 	}
 	var ae *APIError
 	if !errors.As(err, &ae) {
@@ -346,13 +447,7 @@ var unbilledChatCodes = map[string]bool{
 }
 
 // transportError is a request that got no HTTP answer.
-type transportError struct {
-	err    error
-	unsent bool
-}
-
-func (e *transportError) Error() string { return "teepin: " + e.err.Error() }
-func (e *transportError) Unwrap() error { return e.err }
+type transportError = errs.ConnError
 
 // unsent reports whether the request certainly never reached the server.
 func unsent(err error) bool {

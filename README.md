@@ -4,7 +4,7 @@ Teepin Web Services runs AI models in confidential enclaves (Teepin Inference) a
 Storage). This is the official Go client.
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev/)
 [![GoDoc](https://godoc.org/github.com/FlashbackAi/teepin-go?status.svg)](https://godoc.org/github.com/FlashbackAi/teepin-go/teepin)
 
 Links: [Docs](https://www.teepin.com/docs) · [console.teepin.com](https://console.teepin.com) · [teepin.com](https://teepin.com)
@@ -15,7 +15,7 @@ Links: [Docs](https://www.teepin.com/docs) · [console.teepin.com](https://conso
 go get github.com/FlashbackAi/teepin-go/teepin
 ```
 
-Go 1.23 or newer.
+Go 1.26 or newer (the SDK uses the standard library's `crypto/hpke`). It has no dependencies.
 
 ## Authentication
 
@@ -56,8 +56,7 @@ func main() {
 }
 ```
 
-Keep your API key on your server. To let a browser download or upload one file, sign a link on your server (see
-[Signed links](#signed-links)).
+Keep your API key on your server.
 
 ## Teepin Inference
 
@@ -146,53 +145,134 @@ Teepin API key. This SDK adds the attestation results, billing-safe retries and 
 
 ## Teepin Storage
 
-Buckets and files, with large uploads in parallel parts. The key needs `storage:read` to read and `storage:write`
-to write.
+Buckets and files of any size. Files are encrypted on this machine and sent straight to the storage network, and read
+straight back from it, every byte verified before you get it. No file byte passes through Teepin's API, which keeps
+the catalog and signs each request. The key needs `storage:read` to read and `storage:write` to write.
 
-### Buckets
+### Buckets and a first file
 
 ```go
-bucket, err := client.Storage.CreateBucket(ctx, "my-bucket")
-buckets, err := client.Storage.ListBuckets(ctx)
-err = client.Storage.DeleteBucket(ctx, "my-bucket") // only when it is empty
+s := client.Storage
+_, err := s.CreateBucket(ctx, "my-bucket")
+obj, err := s.UploadFile(ctx, "my-bucket", "videos/launch.mp4", "launch.mp4", nil)
+fmt.Println(obj.Key, obj.Size, obj.ETag)
+
+_, err = s.DownloadFile(ctx, "my-bucket", "videos/launch.mp4", "copy.mp4", nil)
+buckets, err := s.ListBuckets(ctx)
+err = s.DeleteBucket(ctx, "old-bucket") // only when it is empty
 ```
 
-### Put and get
+`UploadFile` sends a file of any size: up to 16 MiB is packed with other objects into one write, and a larger file
+goes in parts sent in parallel. Each request is retried on its own, and the object is checked against the bytes read,
+so a corrupted transfer is never reported as success. `DownloadFile` fetches a large object in parallel windows, all
+pinned to the same version of the object, each byte verified before it is written. It writes a temporary file that is
+renamed into place only when the whole object has been checked.
+
+### Upload
 
 ```go
-obj, err := client.Storage.PutObject(ctx, "my-bucket", "notes.txt", strings.NewReader("hello"), 5, nil)
+// bytes, or any reader of a known size (an io.ReaderAt or io.ReadSeeker is read from where it stands)
+obj, err := s.PutObject(ctx, "b", "data.bin", bytes.NewReader(data), int64(len(data)),
+	&teepin.PutObjectOptions{ContentType: "application/octet-stream", Metadata: map[string]string{"owner": "ana"}})
 
-r, err := client.Storage.GetObject(ctx, "my-bucket", "notes.txt", nil)
+// progress and part size
+obj, err = s.UploadFile(ctx, "b", "big.iso", "big.iso", &teepin.UploadOptions{
+	PartSize: 64 << 20,
+	Progress: func(done, total int64) { fmt.Printf("%d/%d\n", done, total) },
+})
+
+// many files at once: one result per file, and one file's failure never fails another
+files, _ := teepin.FilesToUpload([]string{"a.jpg", "b.jpg"}, "photos/", "")
+results, err := s.UploadFiles(ctx, "b", files, nil)
+for _, r := range results {
+	if !r.Saved() {
+		fmt.Println(r.Key, r.Status, r.Err)
+	}
+}
+
+// after a crash, or a cancelled context: finish what was left
+results, err = s.ResumeUploads(ctx, nil)
+
+// a stream of unknown size (a pipe, a socket)
+obj, err = s.UploadStream(ctx, "b", "backup.tar", os.Stdin, nil)
+```
+
+`PutObject` calls made at the same time share packs: each returns once its own pack is committed. How many packs and
+parts are in flight adapts to the network, up to `Config.UploadConcurrency`. A large file and a run of `UploadFiles`
+are journaled in the state directory (`Config.StateDir`), so `ResumeUploads` finishes them after a crash, a lost
+network, or a cancelled context. `ListUploadRuns` shows the runs kept there, and `CleanUploads` removes old ones. A
+stream isn't journaled: if it fails, upload it again. `ListUploads` and `AbortUpload` show and cancel a bucket's open
+uploads in parts.
+
+On a slow link the client sizes its requests to the upload speed it measured from earlier ones, so each takes about 4
+minutes at most: packs shrink, an object a pack request couldn't carry in time goes in parts (from 5 MiB up), and new
+uploads' parts shrink, including a `PartSize` you set. An upload resumed after a crash keeps its part size. An object
+the measured speed can't carry (even a 5 MiB part would take over 4 minutes, or it would need more than 3,000 parts)
+is refused before anything is sent: `IsTooLarge(err)` and `errors.Is(err, teepin.ErrConnectionSpeed)`.
+
+### Download
+
+```go
+_, err = s.DownloadFile(ctx, "b", "big.iso", "/tmp/big.iso", nil) // parallel windows, temp file + rename
+_, err = s.Download(ctx, "b", "big.iso", f, nil)                   // into any io.WriterAt, such as an *os.File
+_, err = s.DownloadStream(ctx, "b", "app.log", w, nil)             // in order, to any io.Writer
+
+r, err := s.GetObject(ctx, "b", "app.log", &teepin.GetObjectOptions{Range: &teepin.ByteRange{Start: 0, End: 1023}})
 if err != nil {
 	return err
 }
 defer r.Close()
-data, err := io.ReadAll(r)
+head, err := io.ReadAll(r)
 
-info, err := client.Storage.StatObject(ctx, "my-bucket", "notes.txt") // size, ETag, content type
+f, err := s.OpenObject(ctx, "b", "video.mp4", &teepin.OpenObjectOptions{Prefetch: 2}) // io.ReaderAt and io.ReadSeeker
+defer f.Close()
 ```
 
-### Large files
+A window that breaks off goes on from its last verified bytes. If the object is replaced mid-download, the error is
+`teepin.ErrObjectChanged`. The whole object is checked against its SHA-256 (`teepin.ErrChecksumMismatch`).
 
-An upload of any size goes in one request up to 16 MiB, and in parallel parts above that. Each part is retried on
-its own and checked against the bytes sent. `Resume` continues an upload that was cut off. A download fetches
-ranges in parallel into a temporary file, renames it into place and checks the SHA-256.
+### Many files to a folder
 
 ```go
-obj, err := client.Storage.UploadFile(ctx, "my-bucket", "videos/a.mp4", "a.mp4", &teepin.UploadOptions{
-	Resume:   true,
-	Progress: func(done, total int64) { fmt.Printf("%d of %d\n", done, total) },
-})
-_, err = client.Storage.DownloadFile(ctx, "my-bucket", "videos/a.mp4", "a-copy.mp4", nil)
+results, err := s.DownloadFiles(ctx, "b", []string{"a/1.jpg", "a/2.jpg"}, "out", nil) // out/a/1.jpg, out/a/2.jpg
+results, err = s.DownloadPrefix(ctx, "b", "photos/2026/", "out", &teepin.DownloadFilesOptions{SkipExisting: true})
+for _, r := range results {
+	if !r.Saved() && !r.Skipped() {
+		log.Printf("%s: %s: %v", r.Key, r.Status, r.Err) // failed, or pending (kept to go on with)
+	}
+}
+results, err = s.ResumeDownloads(ctx, nil) // what a crash, a cancel or a lost network left
 ```
 
-`Upload`, `UploadStream`, `Download` and `DownloadStream` do the same with readers and writers.
+Read sessions are signed 1,000 objects to a request, and objects (or windows of a large one) are fetched
+`Concurrency` at a time (default 8). Each is written to `<name>.teepin-part` beside its target, verified, and renamed
+into place only when whole, so a target is never half written. One object's failure never fails another: each has a
+`DownloadResult` (saved, skipped, failed or pending). A download stopped by a passing error or a cancelled context is
+journaled in the state directory: running the same download again, or `ResumeDownloads`, goes on from the pieces
+already written. `ListDownloadRuns` and `CleanDownloads` show and remove the runs kept. `SkipExisting` leaves a file
+that already has the object's size and SHA-256 (never compared by ETag), signing and billing nothing for it.
+`Paths` names another path under the folder for a key.
 
-### List
+A key that isn't a safe path under the folder fails with a `*teepin.UnsafePathError` and writes nothing: `..`, an
+absolute path, on Windows a name Windows can't hold, two keys for one file, or a link of any kind under the folder.
+
+### Share links
+
+```go
+link, err := s.CreateLink(ctx, "b", "report.pdf", &teepin.CreateLinkOptions{ExpiresIn: time.Hour,
+	Disposition: teepin.LinkAttachment})
+fmt.Println(link.URL, link.ExpiresAt)
+```
+
+A share link opens a console page that anyone with it can use without signing in; the page decrypts the object in
+their browser, so its bytes never pass through Teepin's servers. It works for 15 minutes by default, at most 24 hours.
+There are no upload links.
+
+### Listing
 
 ```go
 // Every object under a prefix, page by page.
-for o, err := range client.Storage.Objects(ctx, "my-bucket", "videos/") {
+for o, err := range s.Objects(ctx, "b", "photos/") {
 	if err != nil {
 		return err
 	}
@@ -200,45 +280,61 @@ for o, err := range client.Storage.Objects(ctx, "my-bucket", "videos/") {
 }
 
 // One page, with "folders".
-page, err := client.Storage.ListObjects(ctx, "my-bucket", &teepin.ListObjectsOptions{Prefix: "videos/", Delimiter: "/"})
+page, err := s.ListObjects(ctx, "b", &teepin.ListObjectsOptions{Prefix: "photos/", Delimiter: "/"})
 ```
 
-### Signed links
+### ETags
 
-Links that work without your key, for a limited time:
+The ETag of an object is the SHA-256 of its bytes, however it was uploaded. ETags are unquoted. To tell whether a
+local file matches an object:
 
 ```go
-link, err := client.Storage.PresignDownload(ctx, "my-bucket", "videos/a.mp4", &teepin.PresignDownloadOptions{TTL: time.Hour})
-fmt.Println(link.URL)
-
-up, err := client.Storage.PresignUpload(ctx, "my-bucket", "inbox/upload.bin", &teepin.PresignUploadOptions{MaxBytes: 100 << 20})
+fh, _ := os.Open("big.iso")
+st, _ := fh.Stat()
+etag, _ := teepin.ComputeETag(fh, st.Size(), 0, 0)
+obj, _ := s.StatObject(ctx, "b", "big.iso")
+same := etag == obj.ETag
 ```
 
-A browser then does one PUT to `up.URL`, with `up.Method` and `up.Headers`.
+An object uploaded in parts by an earlier release of this SDK has `<SHA-256 of the parts' SHA-256s>-<parts>` as its
+ETag. For one of those, pass the part size it was uploaded with: `teepin.ComputeETag(fh, size, partSize,
+obj.PartCount)` (`teepin.PartSize(size, 0)` gives those releases' default).
 
 ### Rename, copy and delete
 
 ```go
-_, err = client.Storage.RenameObject(ctx, "my-bucket", "videos/a.mp4", "archive/a.mp4", false) // instant at any size
-_, err = client.Storage.CopyObject(ctx, "backup", "a.mp4", "my-bucket", "archive/a.mp4", nil) // to backup/a.mp4
-err = client.Storage.DeleteObject(ctx, "my-bucket", "notes.txt")
-res, err := client.Storage.DeleteObjects(ctx, "my-bucket", []string{"a.txt", "b.txt"}) // up to 1000 a request
+_, err = s.RenameObject(ctx, "b", "draft.txt", "final.txt", false) // instant at any size
+_, err = s.CopyObject(ctx, "backup", "a.mp4", "b", "archive/a.mp4", nil) // to backup/a.mp4
+err = s.DeleteObject(ctx, "b", "app.log")
+err = s.DeleteObjectIf(ctx, "b", "app.log", obj.ETag) // only that version: IsPreconditionFailed if it was replaced
+res, err := s.DeleteObjects(ctx, "b", []string{"a.txt", "b.txt"}) // up to 1000 a request
 ```
 
-### The S3 endpoint
+`DeleteObjectIf` deletes only the version whose ETag you checked (`If-Match`), so an upload that lands between your
+check and the delete is kept: the delete answers 412 (`teepin.IsPreconditionFailed(err)`). A missing object is a 404
+either way.
 
-Teepin Storage also speaks S3 at `https://s3.teepin.com`, so the AWS CLI, the AWS SDK for Go, boto3 and rclone
-work unchanged. Create an S3 access key in the console (a project's Settings, then S3 access keys). The region is
-`teepin`.
+A copy is made on this machine: the source is read and verified, then uploaded as a new object (an encrypted object's
+key belongs to that object alone). So its bytes pass through the machine running it, and it is billed as a read as
+well as the stored copy. Every read is pinned to the version first seen, so a source replaced mid-copy fails it, with
+nothing left at the target.
 
-```bash
-aws configure set aws_access_key_id TPAK... --profile teepin
-aws configure set aws_secret_access_key ... --profile teepin
-aws configure set region teepin --profile teepin
-aws --profile teepin --endpoint-url https://s3.teepin.com s3 ls
-```
+### Storage retries
 
-The buckets are the same ones this SDK and the console show.
+A request that fails for a passing reason is sent again after a wait with full jitter, or the server's
+`Retry-After`. It is always retried on `429`, `502` and `503`. It is retried on `500`, `504` or a broken connection
+only when sending it twice is harmless: reads, deletes, and each step of an upload. A rename can't be repeated, so it
+is retried only when it never reached the server.
+
+While the storage network or the API is unavailable, an upload waits for it, up to `Config.UploadWait` (10 minutes),
+then fails with a `*teepin.StorageUnavailableError`. Nothing is reported saved that isn't.
+
+When an answer is lost after the server acted, the SDK recovers rather than failing:
+
+- A bucket that turns out to exist on a retry is fetched.
+- A delete or cancel whose object is gone on a retry succeeds.
+- A rename whose source is gone on a retry returns the destination.
+- An upload whose commit answer was lost commits again, and gets the stored result.
 
 ## Errors
 
@@ -265,6 +361,19 @@ Also `IsUnauthorized`, `IsForbidden`, `IsConflict`, `IsBadRequest`, `IsPrecondit
 Storage calls that fail for a passing reason (the network, a busy server) are retried with backoff,
 `Config.MaxRetries` times (default 4).
 
+Storage has a few errors of its own, found with `errors.As` or `errors.Is`:
+
+| Error | Meaning |
+|---|---|
+| `*teepin.StorageUnavailableError` | storage didn't come back within `Config.UploadWait`; a run's files stay pending for `ResumeUploads` |
+| `*teepin.FileChangedError` | a file changed while it was uploaded, so it was never stored mixed with its old bytes |
+| `*teepin.DataIntegrityError` | data failed a check after one retry; `Reason` says which (`teepin.ErrChecksumMismatch` matches a checksum) |
+| `teepin.ErrObjectChanged` | the object was replaced during a download or a copy |
+| `teepin.ErrKeyErased` | the object's encryption key was erased: it can never be read again (`IsNotFound` too) |
+| `teepin.ErrConnectionSpeed` | an upload refused before anything was sent: too large for the connection at its measured speed (`IsTooLarge` too, code `connection_speed`) |
+| `*teepin.UnsafePathError` | a batch download's key that can't be written under its folder (`teepin.ErrUnsafePath`) |
+| `teepin.ErrObjectStaged` | the object is still staged on the API; it is readable once the stage has drained |
+
 ## Configuration
 
 ```go
@@ -272,9 +381,26 @@ client := teepin.NewClient(teepin.Config{
 	APIKey:     "tpk_...",                // default: TEEPIN_API_KEY
 	BaseURL:    "https://api.teepin.com", // default: TEEPIN_BASE_URL, else this
 	Timeout:    60 * time.Second,         // per call that isn't a transfer or a chat; transfers follow ctx
-	MaxRetries: 4,                        // negative turns retries off
+	MaxRetries: 4,                        // tries again after a passing failure
+
+	// Storage
+	UploadWait:        10 * time.Minute, // waiting for storage to come back: TEEPIN_UPLOAD_WAIT (seconds)
+	UploadConcurrency: 32,               // the most packs and parts in flight: TEEPIN_UPLOAD_CONCURRENCY
+	KeyCacheTTL:       10 * time.Minute, // how long reads keep an object's data key in memory
+	StateDir:          "",               // upload runs' journals: TEEPIN_STATE_DIR, else this system's
 })
 ```
+
+The values shown are the defaults. For each of these numbers and durations, zero means the default and a negative
+value means none: `Timeout` no bound (the context's only), `MaxRetries` no retries, `UploadWait` no wait (an upload
+fails at once), `KeyCacheTTL` no key kept after its read. `UploadConcurrency` is the exception: zero or a negative
+value means the default. The options follow the same rule: `OpenObjectOptions.Prefetch` is 2 by default and a negative
+value fetches nothing ahead; a `Concurrency`, `PartSize` or `ListObjectsOptions.Limit` of zero or less means its
+default; and a `CreateLinkOptions.ExpiresIn` of zero means 15 minutes, while a negative one is refused.
+
+The state directory is `%LOCALAPPDATA%\teepin` on Windows, `~/Library/Application Support/teepin` on macOS and
+`$XDG_STATE_HOME/teepin` (or `~/.local/state/teepin`) elsewhere: the same place the Python and Node SDKs use. Each
+SDK resumes only its own runs. `client.Close()` zeroes the data keys reads keep in memory.
 
 ## Other APIs
 
@@ -283,7 +409,7 @@ The SDK also has clients for services that aren't offered yet. They answer 404 u
 ## Examples
 
 - [inference](examples/inference/main.go): list the models and stream an answer.
-- [storage](examples/storage/main.go): a bucket, an upload and download, a signed link.
+- [storage](examples/storage/main.go): a bucket, an upload with progress, a listing, a verified download.
 
 ```bash
 TEEPIN_API_KEY=tpk_... go run ./examples/inference teepin/glm-5.3 "Explain TLS briefly"
