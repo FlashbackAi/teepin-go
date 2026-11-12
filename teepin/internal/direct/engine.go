@@ -32,10 +32,6 @@ import (
 )
 
 const (
-	// PackTargetBytes is where a pack closes (section 12.4): one of the storage network's efficient writes.
-	PackTargetBytes = 9 << 20
-	// PackMaxObjects is the most objects in one pack (the control plane's cap).
-	PackMaxObjects = 1000
 	// PackObjectLimit is the largest object that goes into a pack; larger ones are uploaded in parts.
 	PackObjectLimit = 16 << 20
 	// StartConcurrency is where the adaptive limit of packs and parts in flight starts.
@@ -46,9 +42,12 @@ const (
 	DefaultUploadWait = 10 * time.Minute
 	// SignMargin: a signature closer than this to its expiry is renewed before it is used.
 	SignMargin = time.Minute
-	// CommitVerifyTries is how often a commit that answers "verifying" is asked again before the pack is sent again
-	// (the storage network shows a PUT at once; section 19.13).
-	CommitVerifyTries = 4
+	// ResendAfterSent and ResendAfterLost: a pack's bytes are sent again only this long after an upload that answered
+	// success, or after one whose answer was lost (section 28.18). Sending 20 MiB again costs far more than asking.
+	ResendAfterSent = 30 * time.Second
+	ResendAfterLost = 5 * time.Second
+	// VerifyEvery is the wait between a commit's looks again once VerifyDelays are spent.
+	VerifyEvery = 2 * time.Second
 	// MaxRebuilds is how many times a pack's files are reserved again (conflict, bad bytes) before they fail.
 	MaxRebuilds = 3
 	// CleanupCap bounds each call of the cleanup after a cancel (section 22.13), so a stop stays bounded.
@@ -157,9 +156,6 @@ const (
 	// RequestBudget is about the longest one request to the storage network should take at the measured speed.
 	// Packs, and the parts of uploads created from then on, shrink to fit it.
 	RequestBudget = 240 * time.Second
-	// PackMinTarget is the smallest a pack's target shrinks to: one TWS1 segment (a pack always holds at least one
-	// object, however slow the link).
-	PackMinTarget = tws1.SegmentSize
 	// SpeedSampleBytes: a PUT smaller than this isn't measured; its time is mostly the round trip, not the link.
 	SpeedSampleBytes = 256 << 10
 	// SpeedWeight is how far each measured PUT moves the estimate (moving averages of bytes and of time).
@@ -286,15 +282,6 @@ func (m *SpeedMeter) Link() *LinkSpeed {
 	return &LinkSpeed{BytesPerSecond: bps, Budget: m.budget}
 }
 
-// PackTargetAt is a pack's target size: target, or less when the link carries less in one request, never below
-// floor. A nil link (nothing measured) keeps target.
-func PackTargetAt(link *LinkSpeed, target, floor int64) int64 {
-	if link == nil {
-		return target
-	}
-	return max(floor, min(target, link.RequestBytes()))
-}
-
 // PackObjectLimitAt is the largest object that goes into a pack; a larger one goes in parts. limit, or on a slow link
 // the bytes one request carries at its speed, but never under minPart: an object a pack request couldn't carry in
 // time goes in parts, which the part rule sizes for the link. A nil link (nothing measured) keeps limit.
@@ -371,42 +358,6 @@ func PackedSize(sizes []int64) int64 {
 		n += tws1.NeedleHeaderSize + tws1.StoredSize(s)
 	}
 	return n
-}
-
-// PlanPacks splits items into packs, in order: each closes when the next item would take it past target bytes or
-// maxObjects objects, and never holds one key twice (a second write to a key waits for the next pack, and writes to
-// one key keep their order). An item bigger than target gets a pack of its own.
-func PlanPacks[T any](items []T, sizeOf func(T) int64, keyOf func(T) string, target int64, maxObjects int) [][]T {
-	var packs [][]T
-	pending := items
-	for len(pending) > 0 {
-		var pack []T
-		pack, pending = NextPack(pending, sizeOf, keyOf, target, maxObjects)
-		packs = append(packs, pack)
-	}
-	return packs
-}
-
-// NextPack is the first of PlanPacks's packs, and the items left for later ones: a planner that packs as it goes, so
-// each pack takes the target the speed measured by then allows (section 22.7).
-func NextPack[T any](items []T, sizeOf func(T) int64, keyOf func(T) string, target int64, maxObjects int) (pack, rest []T) {
-	keys := map[string]bool{}
-	waiting := map[string]bool{} // keys of items left for a later pack, in this pass
-	var size int64
-	for _, it := range items {
-		n := tws1.NeedleHeaderSize + tws1.StoredSize(sizeOf(it))
-		k := keyOf(it)
-		fits := len(pack) == 0 || (size+n <= target && len(pack) < maxObjects)
-		if fits && !keys[k] && !waiting[k] {
-			pack = append(pack, it)
-			keys[k] = true
-			size += n
-		} else {
-			rest = append(rest, it)
-			waiting[k] = true
-		}
-	}
-	return pack, rest
 }
 
 // Outcome is how a slot of the adaptive limit ended.
@@ -553,6 +504,47 @@ func (b *RetryBudget) TryRetry() bool {
 	}
 	b.tokens--
 	return true
+}
+
+// VerifyDelays are the waits before a commit that answered "verifying" is asked again, then VerifyEvery (28.18).
+var VerifyDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second}
+
+// A pack's sign opens every wrapped key, and its commit writes a row per object, so their timeouts grow with the object
+// count (TEEPIN-STORAGE-DESIGN.md 29.15): on one core, the drill measured reserve at 3.3 s for 137,070 objects, sign at
+// 1.4 s for 10,000 and 18.7 s for 137,070, commit at 5.3 s for 137,070. ScaledBase covers the round trip;
+// TimeoutMargin is on top of the server's time. A reserve or sign body of that many objects is tens of MiB, so its
+// sending time is added (BodyTransfer).
+const (
+	ReservePerObject = 25 * time.Microsecond
+	SignPerObject    = 140 * time.Microsecond
+	CommitPerObject  = 40 * time.Microsecond
+	ScaledBase       = time.Second
+	TimeoutMargin    = 3
+)
+
+// ScaledTimeout is a call's timeout for objects objects at perObject each: TimeoutMargin times the server's measured
+// time, plus transfer (sending its body: BodyTransfer), or floor when that is longer (the client's own timeout, or
+// the commit's).
+func ScaledTimeout(objects int, perObject, floor, transfer time.Duration) time.Duration {
+	return max(floor, TimeoutMargin*(ScaledBase+time.Duration(objects)*perObject)+transfer)
+}
+
+// BodyTransfer is the time to send n bytes of a request body: twice their time at the measured speed (bps > 0), as a
+// storage PUT's timer allows (PutTimeout), or their time at floorSpeed before anything is measured.
+func BodyTransfer(n int64, bps, floorSpeed float64) time.Duration {
+	secs := float64(n) / floorSpeed
+	if bps > 0 {
+		secs = 2 * float64(n) / bps
+	}
+	return time.Duration(secs * float64(time.Second))
+}
+
+// VerifyDelay is the wait before a commit's n-th look again (0 first).
+func VerifyDelay(n int) time.Duration {
+	if n < len(VerifyDelays) {
+		return VerifyDelays[n]
+	}
+	return VerifyEvery
 }
 
 // WaitDelay is the wait before the next round when storage or the control plane is unavailable: from 5 s, doubling

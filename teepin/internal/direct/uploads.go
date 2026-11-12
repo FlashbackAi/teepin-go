@@ -10,11 +10,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -66,8 +68,6 @@ const (
 	StateWarnBytes = 1 << 30
 	// commitTimeout bounds a commit or a complete, which verify what storage holds.
 	commitTimeout = 70 * time.Second
-	// commitPoll is the wait before a commit that answered "verifying" is asked again.
-	commitPoll = time.Second
 	// maxResigns is how many times a refused signature is signed again before the request fails.
 	maxResigns = 3
 )
@@ -110,21 +110,15 @@ func (w WriteOptions) ifMatch() string {
 // Sizes are the sizes an upload engine works with; tests shrink them, as the Python tests patch _engine's constants.
 type Sizes struct {
 	PartRules
-	// PackObjectLimit: objects up to this size are packed; larger ones go in parts.
+	// PackObjectLimit: objects up to this size are packed; larger ones go in parts. A pack's own sizes and timings are
+	// section 28's (Uploads.Limits).
 	PackObjectLimit int64
-	// PackTarget: a pack closes at about this many stored bytes.
-	PackTarget int64
-	// PackMinTarget: on a slow link a pack's target shrinks, never below this (section 22.7).
-	PackMinTarget int64
-	// PackMaxObjects is the most objects in a pack.
-	PackMaxObjects int
 	// StreamConcurrency is a stream's parts in flight unless the caller says.
 	StreamConcurrency int
 }
 
 // DefaultSizes are the control plane's and the storage network's.
-var DefaultSizes = Sizes{PartRules: DefaultPartRules, PackObjectLimit: PackObjectLimit, PackTarget: PackTargetBytes,
-	PackMinTarget: PackMinTarget, PackMaxObjects: PackMaxObjects, StreamConcurrency: StreamConcurrency}
+var DefaultSizes = Sizes{PartRules: DefaultPartRules, PackObjectLimit: PackObjectLimit, StreamConcurrency: StreamConcurrency}
 
 // UploadSettings are the client's settings for uploads.
 type UploadSettings struct {
@@ -191,16 +185,24 @@ type Uploads struct {
 	// nil.
 	Warn func(msg string)
 
+	// Limits are the pack sizes and timings (section 28): built in, then the server's from each reservation.
+	Limits PackLimits
+	// Clock is the timing rule's monotonic clock (tests replace it).
+	Clock func() time.Duration
+
 	mu          sync.Mutex
 	accountID   string
-	queue       []queued
+	waiting     map[string]*Arrivals[*packItem] // PutObject's waiting files, per bucket (section 28.17)
+	next        time.Duration                   // when the timing rule next needs a decision, if hasNext
+	hasNext     bool
+	inflight    int64 // PutObject's pack bytes in flight, against MemoryCap
 	slotWaiters []*signal
 }
 
-// queued is a PutObject waiting for a pack.
-type queued struct {
-	bucket string
-	it     *packItem
+// monotonic is a clock that counts from its creation on the monotonic clock.
+func monotonic() func() time.Duration {
+	start := time.Now()
+	return func() time.Duration { return time.Since(start) }
 }
 
 // NewUploads is the upload engine of a client.
@@ -208,18 +210,42 @@ func NewUploads(api API, opts Options, s UploadSettings) *Uploads {
 	return &Uploads{api: api, opts: opts, uploadWait: max(s.Wait, 0), stateDir: s.StateDir,
 		pins: journal.NewPins(s.StateDir), Limit: NewAdaptiveLimit(StartConcurrency, max(1, s.Concurrency)),
 		Budget: NewRetryBudget(0.1, 10), Sizes: DefaultSizes, CleanupCap: CleanupCap, Speed: NewSpeedMeter(),
-		PutTimeoutFloor: PutTimeoutFloor, PutTimeoutSpeed: PutTimeoutSpeed}
+		PutTimeoutFloor: PutTimeoutFloor, PutTimeoutSpeed: PutTimeoutSpeed, Limits: DefaultLimits, Clock: monotonic(),
+		waiting: map[string]*Arrivals[*packItem]{}}
+}
+
+// limits are the pack limits now (the server may change them with any reservation).
+func (u *Uploads) limits() PackLimits {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.Limits
+}
+
+// callTimeout is a pack call's timeout (29.15): the server's time for objects objects, scaled, plus sending body (nil
+// for none) at the speed measured so far; never under floor.
+func (u *Uploads) callTimeout(objects int, perObject, floor time.Duration, body any) time.Duration {
+	var n int64
+	if body != nil {
+		if b, err := json.Marshal(body); err == nil {
+			n = int64(len(b))
+		}
+	}
+	bps, _ := u.Speed.BytesPerSecond()
+	return ScaledTimeout(objects, perObject, floor, BodyTransfer(n, bps, u.PutTimeoutSpeed))
+}
+
+// requestBytes is what one request carries at the speed measured so far, or -1 before anything is measured.
+func (u *Uploads) requestBytes() int64 {
+	if link := u.Speed.Link(); link != nil {
+		return link.RequestBytes()
+	}
+	return -1
 }
 
 // PackObjectLimit is the pack-or-parts choice of every way in (PutObject, Upload, UploadFiles, CopyObject): an object
 // over it goes in parts. Sizes.PackObjectLimit, or less at the speed measured so far (section 22.7).
 func (u *Uploads) PackObjectLimit() int64 {
 	return PackObjectLimitAt(u.Speed.Link(), u.Sizes.PackObjectLimit, u.Sizes.MinBytes)
-}
-
-// PackTarget is the next pack's target size: Sizes.PackTarget, or less at the speed measured so far (section 22.7).
-func (u *Uploads) PackTarget() int64 {
-	return PackTargetAt(u.Speed.Link(), u.Sizes.PackTarget, u.Sizes.PackMinTarget)
 }
 
 // partSize is a new large upload's part size for size bytes, at the speed measured so far: TooSlow's error when the
@@ -567,7 +593,29 @@ type packItem struct {
 	done     chan struct{}
 	doneOnce sync.Once
 	wake     *signal
+
+	// order is a run's place for the file (items given back to the planner keep it); rebuilds the rebuilds of the
+	// packs it was in, carried when a pack gives it back, so MaxRebuilds holds; reqBytes its reserve-request bytes.
+	order    int
+	rebuilds int
+	reqBytes int64
 }
+
+// stored is the item's bytes in a pack: its needle and TWS1 bytes.
+func (it *packItem) stored() int64 { return tws1.NeedleHeaderSize + tws1.StoredSize(it.size) }
+
+// request is the bytes the item adds to a reserve body (section 28.17): its JSON object and a separator.
+func (it *packItem) request() int64 {
+	if it.reqBytes == 0 {
+		b, _ := json.Marshal(it.reserveJSON())
+		it.reqBytes = int64(len(b)) + 2
+	}
+	return it.reqBytes
+}
+
+func itemStored(it *packItem) int64  { return it.stored() }
+func itemKey(it *packItem) string    { return it.key }
+func itemRequest(it *packItem) int64 { return it.request() }
 
 func (it *packItem) finish() {
 	if it.done != nil {
@@ -601,6 +649,8 @@ type reservation struct {
 		Key      string `json:"key"`
 		ObjectID string `json:"object_id"`
 	} `json:"objects,omitempty"`
+	// Limits are the server's pack limits (section 28.15); absent from a server before section 28.
+	Limits json.RawMessage `json:"limits,omitempty"`
 }
 
 // packObject is one object of a pack's manifest.
@@ -642,6 +692,21 @@ type pack struct {
 	resigns  int
 	waits
 	lastError string
+
+	// underFloor is the reason for a pack under the floor (section 28.9), sent with its reserve; "" at or over it.
+	underFloor string
+	// inflight is its bytes counted against MemoryCap while it is in flight (PutObject's packs).
+	inflight int64
+	// sentAt is when its upload ended (in memory only), sentUnknown whether that answer was lost, verifyWaited the
+	// checking waits since: the bytes are sent again only 30 s (5 s) after it (section 28.18).
+	sentAt       time.Duration
+	hasSent      bool
+	sentUnknown  bool
+	verifyWaited time.Duration
+	// giveback takes a run's pack's files back to its planner instead of renewing under the floor (28.5).
+	giveback func([]*packItem)
+	// dissolve: resumed, unsigned and under the floor (28.22 point 5): its idempotency key is asked first.
+	dissolve bool
 }
 
 func newPack(bucket string, items []*packItem, store packStore, id string) *pack {
@@ -747,7 +812,12 @@ func (u *Uploads) drive(ctx context.Context, p *pack) error {
 }
 
 func (u *Uploads) steps(ctx context.Context, p *pack) error {
-	for p.state != "committed" && p.state != "failed" {
+	if p.dissolve {
+		if err := u.dissolvePack(ctx, p); err != nil {
+			return err
+		}
+	}
+	for p.state != "committed" && p.state != "failed" && p.state != "returned" {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -800,8 +870,12 @@ func (u *Uploads) reserve(ctx context.Context, p *pack) error {
 		objects = append(objects, it.reserveJSON())
 	}
 	var res reservation
-	_, err := u.control(ctx, http.MethodPost, BucketPath(p.bucket)+"/packs",
-		map[string]any{"idempotency_key": p.idem, "objects": objects}, &res, &p.waits, 0)
+	body := map[string]any{"idempotency_key": p.idem, "objects": objects}
+	if p.underFloor != "" {
+		body["under_floor"] = p.underFloor
+	}
+	_, err := u.control(ctx, http.MethodPost, BucketPath(p.bucket)+"/packs", body, &res, &p.waits,
+		u.callTimeout(len(p.items), ReservePerObject, u.opts.Timeout, body))
 	if err != nil {
 		switch codeOf(err) {
 		case "reservation_abandoned":
@@ -819,6 +893,11 @@ func (u *Uploads) reserve(ctx context.Context, p *pack) error {
 	}
 	if _, err := u.checkKey(res.AccountKey); err != nil {
 		return err
+	}
+	if l, ok := LimitsFromJSON(res.Limits); ok {
+		u.mu.Lock()
+		u.Limits = l
+		u.mu.Unlock()
 	}
 	ids := map[string]string{}
 	for _, o := range res.Objects {
@@ -857,6 +936,10 @@ func (u *Uploads) build(p *pack) error {
 			}
 		}
 		p.items = rest
+		// A run's other files go back to its planner, so they never go as a smaller pack (section 28.5).
+		if p.giveback != nil && len(rest) > 0 {
+			return u.giveBack(context.Background(), p)
+		}
 		p.state = "failed"
 		if len(rest) > 0 {
 			p.state = "conflict"
@@ -959,7 +1042,8 @@ func (it *packItem) source() string {
 
 func (u *Uploads) sign(ctx context.Context, p *pack) error {
 	var signed signedPut
-	_, err := u.control(ctx, http.MethodPost, BucketPath(p.bucket)+"/packs/"+p.res.Pack+"/sign", p.body, &signed, &p.waits, 0)
+	_, err := u.control(ctx, http.MethodPost, BucketPath(p.bucket)+"/packs/"+p.res.Pack+"/sign", p.body, &signed, &p.waits,
+		u.callTimeout(len(p.items), SignPerObject, u.opts.Timeout, p.body))
 	if err != nil {
 		switch codeOf(err) {
 		case "reservation_abandoned":
@@ -998,11 +1082,13 @@ func (u *Uploads) send(ctx context.Context, p *pack) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	switch OutcomeOf(err) {
-	case Sent:
+	switch o := OutcomeOf(err); o {
+	case Sent, Unknown:
+		p.sentAt, p.hasSent, p.sentUnknown, p.verifyWaited = u.Clock(), true, o == Unknown, 0
 		p.state = "sent"
-	case Unknown:
-		p.state = "unknown"
+		if o == Unknown {
+			p.state = "unknown"
+		}
 	case Resign:
 		p.resigns++
 		if p.resigns > maxResigns {
@@ -1042,6 +1128,9 @@ type commitResult struct {
 		Result   string `json:"result"`
 		Error    string `json:"error"`
 	} `json:"objects"`
+
+	// Purged: committed, then every object in it deleted and the pack's row purged (29.15); no per-object results.
+	Purged bool `json:"purged"`
 }
 
 func (u *Uploads) commit(ctx context.Context, p *pack) error {
@@ -1054,7 +1143,7 @@ func (u *Uploads) commit(ctx context.Context, p *pack) error {
 	}
 	var res commitResult
 	status, err := u.control(ctx, http.MethodPost, BucketPath(p.bucket)+"/packs/"+p.res.Pack+"/commit", nil, &res,
-		&p.waits, commitTimeout)
+		&p.waits, u.callTimeout(len(p.items), CommitPerObject, commitTimeout, nil))
 	if err != nil {
 		switch codeOf(err) {
 		case "reservation_abandoned":
@@ -1071,11 +1160,37 @@ func (u *Uploads) commit(ctx context.Context, p *pack) error {
 		return p.store.savePack(p)
 	}
 	if status == http.StatusAccepted {
-		p.verifies++
-		if unknown || p.verifies > CommitVerifyTries {
+		// Not there yet (section 28.18): asked again after 250 ms, 500 ms, 1 s and 2 s, then every 2 s; the same bytes
+		// are sent again only 30 s after an upload that answered success, or 5 s after one whose answer was lost (or a
+		// pack resumed mid-upload). The time since is the larger of the clock's and the waits'. The waits count against
+		// the upload wait, but a pack always gets its first full cycle (verifying is a normal answer, not storage being
+		// away): a pack the network never shows ends after one sending again, kept for ResumeUploads.
+		now := u.Clock()
+		if !p.hasSent {
+			p.sentAt, p.hasSent, p.sentUnknown, p.verifyWaited = now, true, unknown, 0
+		}
+		limit := ResendAfterSent
+		if p.sentUnknown {
+			limit = ResendAfterLost
+		}
+		since := max(now-p.sentAt, p.verifyWaited)
+		if since >= limit {
 			p.state = "signed" // not there: send the same bytes again
-			p.verifies = 0
-		} else if serr := u.opts.sleep(ctx, commitPoll); serr != nil {
+			p.verifies, p.hasSent = 0, false
+			return p.store.savePack(p)
+		}
+		delay := min(VerifyDelay(p.verifies), limit-since) // the last look comes just as the bytes may go again
+		p.verifies++
+		p.waits.mu.Lock()
+		if p.waits.waited+delay > max(u.uploadWait, limit) {
+			p.waits.mu.Unlock()
+			return &errs.StorageUnavailableError{Message: fmt.Sprintf(
+				"storage didn't show the pack within %s of waiting", max(u.uploadWait, limit))}
+		}
+		p.waits.waited += delay
+		p.waits.mu.Unlock()
+		p.verifyWaited += delay
+		if serr := u.opts.sleep(ctx, delay); serr != nil {
 			return Stopped(ctx, serr)
 		}
 		return p.store.savePack(p)
@@ -1089,6 +1204,8 @@ func (u *Uploads) commit(ctx context.Context, p *pack) error {
 }
 
 // renew gives a pack's items a new reservation and fresh keys (section 17.3).
+// A run's pack under the floor gives its files back to the planner instead (section 28.5); the old reservation is
+// released either way (section 28.23).
 func (u *Uploads) renew(p *pack) error {
 	p.rebuilds++
 	if p.rebuilds > MaxRebuilds {
@@ -1097,6 +1214,16 @@ func (u *Uploads) renew(p *pack) error {
 			why = p.state
 		}
 		return &stop{err: fmt.Errorf("teepin: the pack was rebuilt %d times: %s", MaxRebuilds, why), final: true}
+	}
+	var stored int64
+	for _, it := range p.items {
+		stored += it.stored()
+	}
+	if p.giveback != nil && stored < u.limits().Floor {
+		return u.giveBack(context.Background(), p)
+	}
+	if p.res.Pack != "" {
+		u.releaseReservation(context.Background(), p)
 	}
 	p.lastError = p.state
 	p.store.dropBytes(p)
@@ -1112,9 +1239,73 @@ func (u *Uploads) renew(p *pack) error {
 	return p.store.savePack(p)
 }
 
+// dissolvePack is a resumed pack that was never signed and is under the floor: reserve is asked with its own
+// idempotency key (and its files as journaled), so a pack an earlier run already committed answers pack_committed and
+// is committed for its stored result. Any other answer releases what it reserved, and its files go back to the planner
+// with the rest (section 28.22, point 5).
+func (u *Uploads) dissolvePack(ctx context.Context, p *pack) error {
+	p.dissolve = false
+	p.underFloor = ReasonLeftover // not part of the idempotency digest
+	if err := u.reserve(ctx, p); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var ae *errs.APIError
+		if !errors.As(err, &ae) {
+			return err
+		}
+		// e.g. pack_too_small from a server in enforce: nothing was committed under this key
+	}
+	if p.state == "committing" {
+		return nil
+	}
+	return u.giveBack(ctx, p)
+}
+
+// giveBack hands a run's pack's remaining files back to its planner (section 28.5): its reservation is released and
+// the pack ends as returned, its files planned again with the rest.
+func (u *Uploads) giveBack(ctx context.Context, p *pack) error {
+	if p.res.Pack != "" {
+		u.releaseReservation(ctx, p)
+	}
+	p.store.dropBytes(p)
+	p.state = "returned"
+	if err := p.store.savePack(p); err != nil {
+		return err
+	}
+	items := p.open()
+	for _, it := range items {
+		it.objectID = ""
+		it.rebuilds = max(it.rebuilds, p.rebuilds)
+	}
+	p.giveback(items)
+	return nil
+}
+
+// releaseReservation frees a given-up reservation at once (section 28.23), best effort: a deployment without the
+// route, or any failure, leaves it to expire as before.
+func (u *Uploads) releaseReservation(ctx context.Context, p *pack) {
+	call := &Call{Method: http.MethodPost, Path: BucketPath(p.bucket) + "/packs/" + p.res.Pack + "/release"}
+	_, _ = u.api.Call(ctx, call)
+}
+
 // deliver gives each item its result from a commit's answer.
 func (u *Uploads) deliver(p *pack, res *commitResult) error {
 	at := when(res.CommittedAt)
+	if res.Purged {
+		// Committed, then every object in it deleted and the pack's row purged (TEEPIN-STORAGE-DESIGN.md 29.15): the
+		// answer has no per-object results, but each file was saved. Never uploaded again.
+		slog.Info(fmt.Sprintf("teepin: pack %s was committed at %s; its objects have since been deleted", p.res.Pack,
+			res.CommittedAt))
+		var done []doneItem
+		for _, it := range p.open() {
+			t := at
+			done = append(done, doneItem{it: it, final: true, obj: &Object{ID: it.objectID, Key: it.key, Size: it.size,
+				ContentType: it.contentType, Metadata: it.metadata, ChecksumSHA256: it.sha256, ETag: it.sha256,
+				Status: "deleted", CreatedAt: at, UpdatedAt: at, UploadedAt: &t}})
+		}
+		return u.done(p.store, done...)
+	}
 	type entry = struct {
 		Key      string `json:"key"`
 		ObjectID string `json:"object_id"`
@@ -1178,21 +1369,29 @@ func (u *Uploads) Put(ctx context.Context, bucket, key string, data []byte, w Wr
 		contentType: w.ContentType, metadata: cloneMap(w.Metadata), ifNoneMatch: w.IfNoneMatch, ifMatch: w.ifMatch(),
 		final: true, done: make(chan struct{})}
 	u.mu.Lock()
-	u.queue = append(u.queue, queued{bucket: bucket, it: it})
+	a := u.waiting[bucket]
+	if a == nil {
+		a = NewArrivals[*packItem]()
+		u.waiting[bucket] = a
+	}
+	a.Add(it, it.key, it.stored(), it.request(), u.Clock())
 	u.mu.Unlock()
-	u.Limit.SetPriority(true)
 	deadline := time.Now().Add(u.uploadWait)
 	leave := func() bool {
 		u.mu.Lock()
 		defer u.mu.Unlock()
-		for i, q := range u.queue {
-			if q.it == it {
-				u.queue = append(u.queue[:i:i], u.queue[i+1:]...)
-				u.Limit.SetPriority(len(u.queue) > 0)
-				return true
-			}
+		a := u.waiting[bucket]
+		if a == nil || it.picked {
+			return false
 		}
-		return false
+		a.Remove([]*packItem{it})
+		if a.Len() == 0 {
+			delete(u.waiting, bucket)
+		}
+		if len(u.waiting) == 0 {
+			u.Limit.SetPriority(false) // no save is left to hold a run up
+		}
+		return true
 	}
 	picked := func() bool {
 		u.mu.Lock()
@@ -1214,6 +1413,11 @@ func (u *Uploads) Put(ctx context.Context, bucket, key string, data []byte, w Wr
 		if left <= 0 {
 			break
 		}
+		u.mu.Lock()
+		if u.hasNext {
+			left = min(left, max(time.Millisecond, u.next-u.Clock()))
+		}
+		u.mu.Unlock()
 		t := time.NewTimer(left)
 		select {
 		case <-woken.ch:
@@ -1243,45 +1447,112 @@ func (u *Uploads) Put(ctx context.Context, bucket, key string, data []byte, w Wr
 	return it.result, nil
 }
 
-// dispatch forms a pack from what's waiting whenever a send slot is free.
+// dispatch sends the packs section 28's timing rule allows, oldest bucket first, each when a slot is free and the
+// memory cap allows, and notes when the rule next needs a decision. While a pack would go but has no slot, a run's next
+// pack waits for it (priority); a pack that is only gathering holds no run up.
 func (u *Uploads) dispatch() {
 	for {
 		u.mu.Lock()
-		if len(u.queue) == 0 || !u.Limit.TryAcquire() {
+		bucket, plan, reason, ok := u.choose()
+		if !ok {
 			u.mu.Unlock()
 			return
 		}
-		bucket := u.queue[0].bucket
-		var waiting []*packItem
-		for _, q := range u.queue {
-			if q.bucket == bucket {
-				waiting = append(waiting, q.it)
-			}
-		}
-		// One pack at a time, each at the speed measured by then (section 22.7).
-		batch, _ := NextPack(waiting, func(i *packItem) int64 { return i.size }, func(i *packItem) string { return i.key },
-			u.PackTarget(), u.Sizes.PackMaxObjects)
-		chosen := map[*packItem]bool{}
-		for _, it := range batch {
-			chosen[it] = true
-		}
-		rest := u.queue[:0:0]
-		for _, q := range u.queue {
-			if !chosen[q.it] {
-				rest = append(rest, q)
-			}
-		}
-		u.queue = rest
-		u.Limit.SetPriority(len(u.queue) > 0)
-		for _, it := range batch {
+		for _, it := range plan.Pack {
 			it.picked = true
 			if it.wake != nil {
-				it.wake.fire() // its caller may be waiting for a slot: it has one now
+				it.wake.fire() // its caller may be waiting: its file has a pack now
 			}
 		}
 		u.mu.Unlock()
-		go u.runShared(newPack(bucket, batch, memoryStore{}, ""))
+		p := newPack(bucket, plan.Pack, memoryStore{}, "")
+		p.underFloor, p.inflight = reason, plan.Stored
+		go u.runShared(p)
 	}
+}
+
+// choose is the next pack to send and its reason (a slot taken for it), under u.mu; it sets the next decision time
+// and the priority.
+func (u *Uploads) choose() (string, Plan[*packItem], string, bool) {
+	now := u.Clock()
+	limits, slow := u.Limits.AtSpeed(u.requestBytes())
+	u.hasNext = false
+	blocked := false
+	buckets := make([]string, 0, len(u.waiting))
+	for b := range u.waiting {
+		buckets = append(buckets, b)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		_, ai, _ := u.waiting[buckets[i]].Oldest()
+		_, aj, _ := u.waiting[buckets[j]].Oldest()
+		return ai < aj
+	})
+	plan := func(a *Arrivals[*packItem]) Plan[*packItem] {
+		return PlanPack(a.Items(), itemStored, itemKey, itemRequest, limits, false)
+	}
+	for _, bucket := range buckets {
+		a := u.waiting[bucket]
+		_, oldest, ok := a.Oldest()
+		if !ok {
+			continue
+		}
+		recent := a.RecentArrivals(now, limits.Window)
+		var p Plan[*packItem]
+		planned := false
+		var d Decision
+		if a.Waiting < limits.Floor && a.Request <= limits.RequestBudget() {
+			// The totals say the pack is under the floor: no planning unless it goes (section 28.22, point 6).
+			d = Decide(PackUnder, a.Waiting, oldest, a.Last, recent, now, limits, true)
+		} else {
+			p, planned = plan(a), true
+			d = Decide(p.State, p.Stored, oldest, a.Last, recent, now, limits, true)
+		}
+		if d.Kind == DecideSend && !planned {
+			p, planned = plan(a), true
+			if p.State != PackUnder { // decided again from the planned pack
+				d = Decide(p.State, p.Stored, oldest, a.Last, recent, now, limits, true)
+			}
+		}
+		if d.Kind == DecideWait {
+			if !u.hasNext || d.At < u.next {
+				u.next, u.hasNext = d.At, true
+			}
+			continue
+		}
+		if u.inflight > 0 && u.inflight+p.Stored > MemoryCap {
+			blocked = true
+			continue
+		}
+		if !u.Limit.TryAcquire() {
+			blocked = true
+			continue
+		}
+		a.Remove(p.Pack)
+		if a.Len() == 0 {
+			delete(u.waiting, bucket)
+		}
+		u.inflight += p.Stored
+		u.Limit.SetPriority(blocked)
+		return bucket, p, u.reasonFor(p, d.Reason, slow), true
+	}
+	u.Limit.SetPriority(blocked)
+	return "", Plan[*packItem]{}, "", false
+}
+
+// reasonFor is a pack's reason for being under the floor (section 28.9), or "" at or over it. Callers hold u.mu or
+// read Limits consistently.
+func (u *Uploads) reasonFor(p Plan[*packItem], reason string, slow bool) string {
+	switch {
+	case p.Stored >= u.Limits.Floor:
+		return ""
+	case slow:
+		return ReasonSlowLink
+	case p.State == PackRequestLimited:
+		return ReasonRequestLimit
+	case reason != "":
+		return reason
+	}
+	return ReasonLeftover
 }
 
 // runShared drives one of PutObject's packs: shared by its callers, so no one caller's cancel stops it; its own
@@ -1292,6 +1563,9 @@ func (u *Uploads) runShared(p *pack) {
 		for _, it := range p.items {
 			it.finish()
 		}
+		u.mu.Lock()
+		u.inflight -= p.inflight
+		u.mu.Unlock()
 		u.release(outcome)
 	}()
 	if err := u.drive(context.Background(), p); err != nil {
@@ -1334,7 +1608,11 @@ func (u *Uploads) release(o Outcome) {
 func (u *Uploads) Queued() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return len(u.queue)
+	n := 0
+	for _, a := range u.waiting {
+		n += a.Len()
+	}
+	return n
 }
 
 // ReleaseSlot gives back a slot taken with Limit.TryAcquire, leaving the limit as it is, and wakes PutObject's

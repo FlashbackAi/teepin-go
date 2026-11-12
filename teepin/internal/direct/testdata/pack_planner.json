@@ -1,0 +1,8485 @@
+{
+ "spec": "TEEPIN-STORAGE-DESIGN.md 28.3 and 28.17: the planner (next pack) and the timing rule (decide)",
+ "notes": [
+  "planner: each case's items are [key, stored bytes, reserve-request bytes]; plan pack after pack (with",
+  "the tail when tail is true) until no item is left; packs lists each pack's item indexes, state and stored",
+  "bytes. limits.request_budget is the bytes a reserve body's objects may take.",
+  "repeat: items are count copies of {key with {i} its index, stored, request}.",
+  "decide: arrivals are [time, stored bytes] of saves that arrived able to join, without the oldest's own;",
+  "decision.at is only meaningful for kind wait (0 otherwise); reason is null at or over the floor."
+ ],
+ "planner": [
+  {
+   "name": "28.3: 7, 7 and 7 MiB as a run is one pack of 21 MiB",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "f0",
+     7340032,
+     100
+    ],
+    [
+     "f1",
+     7340032,
+     100
+    ],
+    [
+     "f2",
+     7340032,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "ready",
+     "stored": 22020096
+    }
+   ]
+  },
+  {
+   "name": "7, 7 and 7 MiB as saves (no tail): 14 then 7",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "f0",
+     7340032,
+     100
+    ],
+    [
+     "f1",
+     7340032,
+     100
+    ],
+    [
+     "f2",
+     7340032,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1
+     ],
+     "state": "full",
+     "stored": 14680064
+    },
+    {
+     "items": [
+      2
+     ],
+     "state": "under",
+     "stored": 7340032
+    }
+   ]
+  },
+  {
+   "name": "28.3: 6, 15 and 15 MiB is 21 and 15",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "f0",
+     6291456,
+     100
+    ],
+    [
+     "f1",
+     15728640,
+     100
+    ],
+    [
+     "f2",
+     15728640,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1
+     ],
+     "state": "full",
+     "stored": 22020096
+    },
+    {
+     "items": [
+      2
+     ],
+     "state": "ready",
+     "stored": 15728640
+    }
+   ]
+  },
+  {
+   "name": "a pack of exactly the floor is at it: full",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "a",
+     10485760,
+     1
+    ],
+    [
+     "b",
+     15728640,
+     1
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0
+     ],
+     "state": "full",
+     "stored": 10485760
+    },
+    {
+     "items": [
+      1
+     ],
+     "state": "ready",
+     "stored": 15728640
+    }
+   ]
+  },
+  {
+   "name": "a pack may reach the ceiling exactly",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "a",
+     10485760,
+     1
+    ],
+    [
+     "b",
+     10485760,
+     1
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1
+     ],
+     "state": "ready",
+     "stored": 20971520
+    }
+   ]
+  },
+  {
+   "name": "under the floor the count never stops a pack",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "t0",
+     100,
+     10
+    ],
+    [
+     "t1",
+     100,
+     10
+    ],
+    [
+     "t2",
+     100,
+     10
+    ],
+    [
+     "t3",
+     100,
+     10
+    ],
+    [
+     "t4",
+     100,
+     10
+    ],
+    [
+     "t5",
+     100,
+     10
+    ],
+    [
+     "t6",
+     100,
+     10
+    ],
+    [
+     "t7",
+     100,
+     10
+    ],
+    [
+     "t8",
+     100,
+     10
+    ],
+    [
+     "t9",
+     100,
+     10
+    ],
+    [
+     "t10",
+     100,
+     10
+    ],
+    [
+     "t11",
+     100,
+     10
+    ],
+    [
+     "t12",
+     100,
+     10
+    ],
+    [
+     "t13",
+     100,
+     10
+    ],
+    [
+     "t14",
+     100,
+     10
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1000
+    },
+    {
+     "items": [
+      10,
+      11,
+      12,
+      13,
+      14
+     ],
+     "state": "under",
+     "stored": 500
+    }
+   ]
+  },
+  {
+   "name": "at the floor the count holds",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "big",
+     1000,
+     10
+    ],
+    [
+     "t0",
+     10,
+     10
+    ],
+    [
+     "t1",
+     10,
+     10
+    ],
+    [
+     "t2",
+     10,
+     10
+    ],
+    [
+     "t3",
+     10,
+     10
+    ],
+    [
+     "t4",
+     10,
+     10
+    ],
+    [
+     "t5",
+     10,
+     10
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1020
+    },
+    {
+     "items": [
+      3,
+      4,
+      5,
+      6
+     ],
+     "state": "under",
+     "stored": 40
+    }
+   ]
+  },
+  {
+   "name": "the request budget ends a pack under the floor",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "t0",
+     100,
+     3000
+    ],
+    [
+     "t1",
+     100,
+     3000
+    ],
+    [
+     "t2",
+     100,
+     3000
+    ],
+    [
+     "t3",
+     100,
+     3000
+    ],
+    [
+     "t4",
+     100,
+     3000
+    ],
+    [
+     "t5",
+     100,
+     3000
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "request_limited",
+     "stored": 300
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "under",
+     "stored": 300
+    }
+   ]
+  },
+  {
+   "name": "the first item joins whatever its request",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "huge",
+     100,
+     50000
+    ],
+    [
+     "b",
+     100,
+     10
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0
+     ],
+     "state": "request_limited",
+     "stored": 100
+    },
+    {
+     "items": [
+      1
+     ],
+     "state": "under",
+     "stored": 100
+    }
+   ]
+  },
+  {
+   "name": "writes to one key keep their order",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "a",
+     1048576,
+     1
+    ],
+    [
+     "b",
+     1048576,
+     1
+    ],
+    [
+     "a",
+     1048576,
+     1
+    ],
+    [
+     "c",
+     1048576,
+     1
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      3
+     ],
+     "state": "under",
+     "stored": 3145728
+    },
+    {
+     "items": [
+      2
+     ],
+     "state": "under",
+     "stored": 1048576
+    }
+   ]
+  },
+  {
+   "name": "a tail with a key in the pack is its own pack",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "f0",
+     12582912,
+     100
+    ],
+    [
+     "f0",
+     2097152,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0
+     ],
+     "state": "ready",
+     "stored": 12582912
+    },
+    {
+     "items": [
+      1
+     ],
+     "state": "under",
+     "stored": 2097152
+    }
+   ]
+  },
+  {
+   "name": "a write turned away at the ceiling holds back a later write to its key",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "big",
+     12582912,
+     100
+    ],
+    [
+     "x",
+     9437184,
+     100
+    ],
+    [
+     "x",
+     1048576,
+     100
+    ],
+    [
+     "y",
+     1048576,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      3
+     ],
+     "state": "full",
+     "stored": 13631488
+    },
+    {
+     "items": [
+      1
+     ],
+     "state": "under",
+     "stored": 9437184
+    },
+    {
+     "items": [
+      2
+     ],
+     "state": "under",
+     "stored": 1048576
+    }
+   ]
+  },
+  {
+   "name": "small files fill in behind; the 9 left is a tail",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "f0",
+     12582912,
+     100
+    ],
+    [
+     "f1",
+     9437184,
+     100
+    ],
+    [
+     "f2",
+     1048576,
+     100
+    ],
+    [
+     "f3",
+     1048576,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      2,
+      3,
+      1
+     ],
+     "state": "ready",
+     "stored": 24117248
+    }
+   ]
+  },
+  {
+   "name": "a tail over the server's count cap stays out",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 3,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "f0",
+     12582912,
+     100
+    ],
+    [
+     "f1",
+     9437184,
+     100
+    ],
+    [
+     "f2",
+     1048576,
+     100
+    ],
+    [
+     "f3",
+     1048576,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 14680064
+    },
+    {
+     "items": [
+      1
+     ],
+     "state": "under",
+     "stored": 9437184
+    }
+   ]
+  },
+  {
+   "name": "a run under the floor is one pack",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "f0",
+     1048576,
+     100
+    ],
+    [
+     "f1",
+     2097152,
+     100
+    ],
+    [
+     "f2",
+     3145728,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "under",
+     "stored": 6291456
+    }
+   ]
+  },
+  {
+   "name": "on a slow link a pack stays within the size, never one file over",
+   "limits": {
+    "floor": 1,
+    "ceiling": 102400,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "f0",
+     30720,
+     100
+    ],
+    [
+     "f1",
+     30720,
+     100
+    ],
+    [
+     "f2",
+     30720,
+     100
+    ],
+    [
+     "f3",
+     30720,
+     100
+    ],
+    [
+     "f4",
+     30720,
+     100
+    ],
+    [
+     "f5",
+     30720,
+     100
+    ],
+    [
+     "f6",
+     30720,
+     100
+    ],
+    [
+     "f7",
+     30720,
+     100
+    ],
+    [
+     "f8",
+     30720,
+     100
+    ],
+    [
+     "f9",
+     30720,
+     100
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 92160
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 92160
+    },
+    {
+     "items": [
+      6,
+      7,
+      8
+     ],
+     "state": "full",
+     "stored": 92160
+    },
+    {
+     "items": [
+      9
+     ],
+     "state": "ready",
+     "stored": 30720
+    }
+   ]
+  },
+  {
+   "name": "seeded 0 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     280,
+     136
+    ],
+    [
+     "u1",
+     214,
+     148
+    ],
+    [
+     "u2",
+     68,
+     29
+    ],
+    [
+     "u3",
+     494,
+     323
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "ready",
+     "stored": 1056
+    }
+   ]
+  },
+  {
+   "name": "seeded 0 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     280,
+     136
+    ],
+    [
+     "u1",
+     214,
+     148
+    ],
+    [
+     "u2",
+     68,
+     29
+    ],
+    [
+     "u3",
+     494,
+     323
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "ready",
+     "stored": 1056
+    }
+   ]
+  },
+  {
+   "name": "seeded 1 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     661,
+     628
+    ],
+    [
+     "k7",
+     68,
+     790
+    ],
+    [
+     "u2",
+     461,
+     744
+    ],
+    [
+     "k6",
+     713,
+     71
+    ],
+    [
+     "k7",
+     626,
+     817
+    ],
+    [
+     "u5",
+     198,
+     236
+    ],
+    [
+     "k9",
+     1396,
+     32
+    ],
+    [
+     "k0",
+     1034,
+     109
+    ],
+    [
+     "u8",
+     77,
+     558
+    ],
+    [
+     "u9",
+     292,
+     688
+    ],
+    [
+     "u10",
+     902,
+     237
+    ],
+    [
+     "k0",
+     1191,
+     704
+    ],
+    [
+     "u12",
+     226,
+     664
+    ],
+    [
+     "u13",
+     188,
+     225
+    ],
+    [
+     "u14",
+     286,
+     122
+    ],
+    [
+     "u15",
+     1346,
+     74
+    ],
+    [
+     "k3",
+     88,
+     462
+    ],
+    [
+     "u17",
+     1287,
+     411
+    ],
+    [
+     "u18",
+     36,
+     809
+    ],
+    [
+     "u19",
+     1479,
+     538
+    ],
+    [
+     "k5",
+     1112,
+     402
+    ],
+    [
+     "u21",
+     486,
+     250
+    ],
+    [
+     "u22",
+     922,
+     848
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1190
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1537
+    },
+    {
+     "items": [
+      6,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1765
+    },
+    {
+     "items": [
+      7,
+      10,
+      18
+     ],
+     "state": "full",
+     "stored": 1972
+    },
+    {
+     "items": [
+      11,
+      12,
+      13
+     ],
+     "state": "full",
+     "stored": 1605
+    },
+    {
+     "items": [
+      14,
+      15,
+      16
+     ],
+     "state": "full",
+     "stored": 1720
+    },
+    {
+     "items": [
+      17,
+      21
+     ],
+     "state": "full",
+     "stored": 1773
+    },
+    {
+     "items": [
+      19
+     ],
+     "state": "full",
+     "stored": 1479
+    },
+    {
+     "items": [
+      20,
+      22
+     ],
+     "state": "ready",
+     "stored": 2034
+    }
+   ]
+  },
+  {
+   "name": "seeded 1 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     661,
+     628
+    ],
+    [
+     "k7",
+     68,
+     790
+    ],
+    [
+     "u2",
+     461,
+     744
+    ],
+    [
+     "k6",
+     713,
+     71
+    ],
+    [
+     "k7",
+     626,
+     817
+    ],
+    [
+     "u5",
+     198,
+     236
+    ],
+    [
+     "k9",
+     1396,
+     32
+    ],
+    [
+     "k0",
+     1034,
+     109
+    ],
+    [
+     "u8",
+     77,
+     558
+    ],
+    [
+     "u9",
+     292,
+     688
+    ],
+    [
+     "u10",
+     902,
+     237
+    ],
+    [
+     "k0",
+     1191,
+     704
+    ],
+    [
+     "u12",
+     226,
+     664
+    ],
+    [
+     "u13",
+     188,
+     225
+    ],
+    [
+     "u14",
+     286,
+     122
+    ],
+    [
+     "u15",
+     1346,
+     74
+    ],
+    [
+     "k3",
+     88,
+     462
+    ],
+    [
+     "u17",
+     1287,
+     411
+    ],
+    [
+     "u18",
+     36,
+     809
+    ],
+    [
+     "u19",
+     1479,
+     538
+    ],
+    [
+     "k5",
+     1112,
+     402
+    ],
+    [
+     "u21",
+     486,
+     250
+    ],
+    [
+     "u22",
+     922,
+     848
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1190
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1537
+    },
+    {
+     "items": [
+      6,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1765
+    },
+    {
+     "items": [
+      7,
+      10,
+      18
+     ],
+     "state": "full",
+     "stored": 1972
+    },
+    {
+     "items": [
+      11,
+      12,
+      13
+     ],
+     "state": "full",
+     "stored": 1605
+    },
+    {
+     "items": [
+      14,
+      15,
+      16
+     ],
+     "state": "full",
+     "stored": 1720
+    },
+    {
+     "items": [
+      17,
+      21
+     ],
+     "state": "full",
+     "stored": 1773
+    },
+    {
+     "items": [
+      19
+     ],
+     "state": "full",
+     "stored": 1479
+    },
+    {
+     "items": [
+      20
+     ],
+     "state": "full",
+     "stored": 1112
+    },
+    {
+     "items": [
+      22
+     ],
+     "state": "under",
+     "stored": 922
+    }
+   ]
+  },
+  {
+   "name": "seeded 2 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "k2",
+     296,
+     476
+    ],
+    [
+     "k1",
+     63,
+     60
+    ],
+    [
+     "u2",
+     1290,
+     335
+    ],
+    [
+     "u3",
+     371,
+     707
+    ],
+    [
+     "u4",
+     350,
+     521
+    ],
+    [
+     "k5",
+     39,
+     583
+    ],
+    [
+     "k4",
+     1127,
+     757
+    ],
+    [
+     "u7",
+     753,
+     398
+    ],
+    [
+     "u8",
+     105,
+     281
+    ],
+    [
+     "u9",
+     758,
+     323
+    ],
+    [
+     "u10",
+     1484,
+     528
+    ],
+    [
+     "k6",
+     371,
+     896
+    ],
+    [
+     "u12",
+     954,
+     884
+    ],
+    [
+     "u13",
+     171,
+     381
+    ],
+    [
+     "u14",
+     306,
+     6
+    ],
+    [
+     "k5",
+     555,
+     319
+    ],
+    [
+     "u16",
+     1137,
+     121
+    ],
+    [
+     "u17",
+     245,
+     464
+    ],
+    [
+     "u18",
+     151,
+     467
+    ],
+    [
+     "u19",
+     1229,
+     637
+    ],
+    [
+     "u20",
+     1168,
+     390
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1649
+    },
+    {
+     "items": [
+      3,
+      4,
+      5,
+      6
+     ],
+     "state": "full",
+     "stored": 1887
+    },
+    {
+     "items": [
+      7,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1616
+    },
+    {
+     "items": [
+      10,
+      11
+     ],
+     "state": "full",
+     "stored": 1855
+    },
+    {
+     "items": [
+      12,
+      13,
+      14
+     ],
+     "state": "full",
+     "stored": 1431
+    },
+    {
+     "items": [
+      15,
+      16,
+      17
+     ],
+     "state": "full",
+     "stored": 1937
+    },
+    {
+     "items": [
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1380
+    },
+    {
+     "items": [
+      20
+     ],
+     "state": "ready",
+     "stored": 1168
+    }
+   ]
+  },
+  {
+   "name": "seeded 2 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "k2",
+     296,
+     476
+    ],
+    [
+     "k1",
+     63,
+     60
+    ],
+    [
+     "u2",
+     1290,
+     335
+    ],
+    [
+     "u3",
+     371,
+     707
+    ],
+    [
+     "u4",
+     350,
+     521
+    ],
+    [
+     "k5",
+     39,
+     583
+    ],
+    [
+     "k4",
+     1127,
+     757
+    ],
+    [
+     "u7",
+     753,
+     398
+    ],
+    [
+     "u8",
+     105,
+     281
+    ],
+    [
+     "u9",
+     758,
+     323
+    ],
+    [
+     "u10",
+     1484,
+     528
+    ],
+    [
+     "k6",
+     371,
+     896
+    ],
+    [
+     "u12",
+     954,
+     884
+    ],
+    [
+     "u13",
+     171,
+     381
+    ],
+    [
+     "u14",
+     306,
+     6
+    ],
+    [
+     "k5",
+     555,
+     319
+    ],
+    [
+     "u16",
+     1137,
+     121
+    ],
+    [
+     "u17",
+     245,
+     464
+    ],
+    [
+     "u18",
+     151,
+     467
+    ],
+    [
+     "u19",
+     1229,
+     637
+    ],
+    [
+     "u20",
+     1168,
+     390
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1649
+    },
+    {
+     "items": [
+      3,
+      4,
+      5,
+      6
+     ],
+     "state": "full",
+     "stored": 1887
+    },
+    {
+     "items": [
+      7,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1616
+    },
+    {
+     "items": [
+      10,
+      11
+     ],
+     "state": "full",
+     "stored": 1855
+    },
+    {
+     "items": [
+      12,
+      13,
+      14
+     ],
+     "state": "full",
+     "stored": 1431
+    },
+    {
+     "items": [
+      15,
+      16,
+      17
+     ],
+     "state": "full",
+     "stored": 1937
+    },
+    {
+     "items": [
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1380
+    },
+    {
+     "items": [
+      20
+     ],
+     "state": "ready",
+     "stored": 1168
+    }
+   ]
+  },
+  {
+   "name": "seeded 3 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     143,
+     109
+    ],
+    [
+     "u1",
+     102,
+     279
+    ],
+    [
+     "u2",
+     69,
+     667
+    ],
+    [
+     "u3",
+     114,
+     241
+    ],
+    [
+     "u4",
+     1094,
+     331
+    ],
+    [
+     "u5",
+     289,
+     875
+    ],
+    [
+     "u6",
+     191,
+     259
+    ],
+    [
+     "u7",
+     1100,
+     801
+    ],
+    [
+     "u8",
+     96,
+     312
+    ],
+    [
+     "u9",
+     118,
+     29
+    ],
+    [
+     "k3",
+     1119,
+     105
+    ],
+    [
+     "u11",
+     275,
+     193
+    ],
+    [
+     "u12",
+     989,
+     9
+    ],
+    [
+     "u13",
+     895,
+     580
+    ],
+    [
+     "u14",
+     833,
+     672
+    ],
+    [
+     "u15",
+     875,
+     873
+    ],
+    [
+     "u16",
+     558,
+     717
+    ],
+    [
+     "u17",
+     175,
+     57
+    ],
+    [
+     "u18",
+     595,
+     554
+    ],
+    [
+     "k0",
+     230,
+     16
+    ],
+    [
+     "u20",
+     723,
+     399
+    ],
+    [
+     "u21",
+     154,
+     108
+    ],
+    [
+     "u22",
+     164,
+     846
+    ],
+    [
+     "u23",
+     274,
+     699
+    ],
+    [
+     "u24",
+     27,
+     412
+    ],
+    [
+     "u25",
+     288,
+     266
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "state": "full",
+     "stored": 1522
+    },
+    {
+     "items": [
+      5,
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 1580
+    },
+    {
+     "items": [
+      8,
+      9,
+      10
+     ],
+     "state": "full",
+     "stored": 1333
+    },
+    {
+     "items": [
+      11,
+      12,
+      16
+     ],
+     "state": "full",
+     "stored": 1822
+    },
+    {
+     "items": [
+      13,
+      14,
+      17
+     ],
+     "state": "full",
+     "stored": 1903
+    },
+    {
+     "items": [
+      15,
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1700
+    },
+    {
+     "items": [
+      20,
+      21,
+      22,
+      23,
+      24,
+      25
+     ],
+     "state": "ready",
+     "stored": 1630
+    }
+   ]
+  },
+  {
+   "name": "seeded 3 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     143,
+     109
+    ],
+    [
+     "u1",
+     102,
+     279
+    ],
+    [
+     "u2",
+     69,
+     667
+    ],
+    [
+     "u3",
+     114,
+     241
+    ],
+    [
+     "u4",
+     1094,
+     331
+    ],
+    [
+     "u5",
+     289,
+     875
+    ],
+    [
+     "u6",
+     191,
+     259
+    ],
+    [
+     "u7",
+     1100,
+     801
+    ],
+    [
+     "u8",
+     96,
+     312
+    ],
+    [
+     "u9",
+     118,
+     29
+    ],
+    [
+     "k3",
+     1119,
+     105
+    ],
+    [
+     "u11",
+     275,
+     193
+    ],
+    [
+     "u12",
+     989,
+     9
+    ],
+    [
+     "u13",
+     895,
+     580
+    ],
+    [
+     "u14",
+     833,
+     672
+    ],
+    [
+     "u15",
+     875,
+     873
+    ],
+    [
+     "u16",
+     558,
+     717
+    ],
+    [
+     "u17",
+     175,
+     57
+    ],
+    [
+     "u18",
+     595,
+     554
+    ],
+    [
+     "k0",
+     230,
+     16
+    ],
+    [
+     "u20",
+     723,
+     399
+    ],
+    [
+     "u21",
+     154,
+     108
+    ],
+    [
+     "u22",
+     164,
+     846
+    ],
+    [
+     "u23",
+     274,
+     699
+    ],
+    [
+     "u24",
+     27,
+     412
+    ],
+    [
+     "u25",
+     288,
+     266
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "state": "full",
+     "stored": 1522
+    },
+    {
+     "items": [
+      5,
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 1580
+    },
+    {
+     "items": [
+      8,
+      9,
+      10
+     ],
+     "state": "full",
+     "stored": 1333
+    },
+    {
+     "items": [
+      11,
+      12,
+      16
+     ],
+     "state": "full",
+     "stored": 1822
+    },
+    {
+     "items": [
+      13,
+      14,
+      17
+     ],
+     "state": "full",
+     "stored": 1903
+    },
+    {
+     "items": [
+      15,
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1700
+    },
+    {
+     "items": [
+      20,
+      21,
+      22
+     ],
+     "state": "full",
+     "stored": 1041
+    },
+    {
+     "items": [
+      23,
+      24,
+      25
+     ],
+     "state": "under",
+     "stored": 589
+    }
+   ]
+  },
+  {
+   "name": "seeded 4 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     194,
+     115
+    ],
+    [
+     "k1",
+     557,
+     350
+    ],
+    [
+     "u2",
+     40,
+     867
+    ],
+    [
+     "k2",
+     146,
+     689
+    ],
+    [
+     "u4",
+     522,
+     156
+    ],
+    [
+     "u5",
+     733,
+     427
+    ],
+    [
+     "k0",
+     103,
+     338
+    ],
+    [
+     "u7",
+     879,
+     111
+    ],
+    [
+     "u8",
+     64,
+     806
+    ],
+    [
+     "u9",
+     8,
+     813
+    ],
+    [
+     "u10",
+     179,
+     639
+    ],
+    [
+     "u11",
+     565,
+     176
+    ],
+    [
+     "k7",
+     971,
+     127
+    ],
+    [
+     "k8",
+     47,
+     65
+    ],
+    [
+     "u14",
+     14,
+     382
+    ],
+    [
+     "u15",
+     54,
+     104
+    ],
+    [
+     "u16",
+     94,
+     595
+    ],
+    [
+     "u17",
+     152,
+     844
+    ],
+    [
+     "k1",
+     182,
+     128
+    ],
+    [
+     "u19",
+     1151,
+     285
+    ],
+    [
+     "u20",
+     137,
+     23
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "state": "full",
+     "stored": 1459
+    },
+    {
+     "items": [
+      5,
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 1715
+    },
+    {
+     "items": [
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "state": "full",
+     "stored": 1787
+    },
+    {
+     "items": [
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+     ],
+     "state": "ready",
+     "stored": 1831
+    }
+   ]
+  },
+  {
+   "name": "seeded 4 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     194,
+     115
+    ],
+    [
+     "k1",
+     557,
+     350
+    ],
+    [
+     "u2",
+     40,
+     867
+    ],
+    [
+     "k2",
+     146,
+     689
+    ],
+    [
+     "u4",
+     522,
+     156
+    ],
+    [
+     "u5",
+     733,
+     427
+    ],
+    [
+     "k0",
+     103,
+     338
+    ],
+    [
+     "u7",
+     879,
+     111
+    ],
+    [
+     "u8",
+     64,
+     806
+    ],
+    [
+     "u9",
+     8,
+     813
+    ],
+    [
+     "u10",
+     179,
+     639
+    ],
+    [
+     "u11",
+     565,
+     176
+    ],
+    [
+     "k7",
+     971,
+     127
+    ],
+    [
+     "k8",
+     47,
+     65
+    ],
+    [
+     "u14",
+     14,
+     382
+    ],
+    [
+     "u15",
+     54,
+     104
+    ],
+    [
+     "u16",
+     94,
+     595
+    ],
+    [
+     "u17",
+     152,
+     844
+    ],
+    [
+     "k1",
+     182,
+     128
+    ],
+    [
+     "u19",
+     1151,
+     285
+    ],
+    [
+     "u20",
+     137,
+     23
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ],
+     "state": "full",
+     "stored": 1459
+    },
+    {
+     "items": [
+      5,
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 1715
+    },
+    {
+     "items": [
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "state": "full",
+     "stored": 1787
+    },
+    {
+     "items": [
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1694
+    },
+    {
+     "items": [
+      20
+     ],
+     "state": "under",
+     "stored": 137
+    }
+   ]
+  },
+  {
+   "name": "seeded 5 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     884,
+     258
+    ],
+    [
+     "k0",
+     294,
+     823
+    ],
+    [
+     "u2",
+     113,
+     457
+    ],
+    [
+     "u3",
+     116,
+     651
+    ],
+    [
+     "u4",
+     921,
+     520
+    ],
+    [
+     "k5",
+     939,
+     447
+    ],
+    [
+     "u6",
+     1004,
+     194
+    ],
+    [
+     "u7",
+     191,
+     67
+    ],
+    [
+     "u8",
+     418,
+     581
+    ],
+    [
+     "u9",
+     45,
+     335
+    ],
+    [
+     "u10",
+     797,
+     212
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1291
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1976
+    },
+    {
+     "items": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "state": "ready",
+     "stored": 2455
+    }
+   ]
+  },
+  {
+   "name": "seeded 5 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     884,
+     258
+    ],
+    [
+     "k0",
+     294,
+     823
+    ],
+    [
+     "u2",
+     113,
+     457
+    ],
+    [
+     "u3",
+     116,
+     651
+    ],
+    [
+     "u4",
+     921,
+     520
+    ],
+    [
+     "k5",
+     939,
+     447
+    ],
+    [
+     "u6",
+     1004,
+     194
+    ],
+    [
+     "u7",
+     191,
+     67
+    ],
+    [
+     "u8",
+     418,
+     581
+    ],
+    [
+     "u9",
+     45,
+     335
+    ],
+    [
+     "u10",
+     797,
+     212
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1291
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1976
+    },
+    {
+     "items": [
+      6,
+      7,
+      8
+     ],
+     "state": "full",
+     "stored": 1613
+    },
+    {
+     "items": [
+      9,
+      10
+     ],
+     "state": "under",
+     "stored": 842
+    }
+   ]
+  },
+  {
+   "name": "seeded 6 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "k4",
+     642,
+     126
+    ],
+    [
+     "u1",
+     296,
+     689
+    ],
+    [
+     "u2",
+     1199,
+     900
+    ],
+    [
+     "u3",
+     450,
+     361
+    ],
+    [
+     "u4",
+     1497,
+     624
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 2137
+    },
+    {
+     "items": [
+      3,
+      4
+     ],
+     "state": "ready",
+     "stored": 1947
+    }
+   ]
+  },
+  {
+   "name": "seeded 6 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "k4",
+     642,
+     126
+    ],
+    [
+     "u1",
+     296,
+     689
+    ],
+    [
+     "u2",
+     1199,
+     900
+    ],
+    [
+     "u3",
+     450,
+     361
+    ],
+    [
+     "u4",
+     1497,
+     624
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 2137
+    },
+    {
+     "items": [
+      3,
+      4
+     ],
+     "state": "ready",
+     "stored": 1947
+    }
+   ]
+  },
+  {
+   "name": "seeded 7 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     245,
+     710
+    ],
+    [
+     "k5",
+     980,
+     169
+    ],
+    [
+     "u2",
+     199,
+     211
+    ],
+    [
+     "u3",
+     235,
+     267
+    ],
+    [
+     "u4",
+     528,
+     333
+    ],
+    [
+     "u5",
+     1333,
+     465
+    ],
+    [
+     "u6",
+     176,
+     354
+    ],
+    [
+     "u7",
+     141,
+     263
+    ],
+    [
+     "u8",
+     204,
+     244
+    ],
+    [
+     "u9",
+     96,
+     300
+    ],
+    [
+     "u10",
+     985,
+     772
+    ],
+    [
+     "u11",
+     90,
+     449
+    ],
+    [
+     "u12",
+     624,
+     376
+    ],
+    [
+     "u13",
+     280,
+     662
+    ],
+    [
+     "u14",
+     1434,
+     471
+    ],
+    [
+     "u15",
+     558,
+     683
+    ],
+    [
+     "u16",
+     524,
+     263
+    ],
+    [
+     "u17",
+     662,
+     249
+    ],
+    [
+     "u18",
+     1316,
+     797
+    ],
+    [
+     "u19",
+     609,
+     5
+    ],
+    [
+     "u20",
+     801,
+     670
+    ],
+    [
+     "u21",
+     1270,
+     51
+    ],
+    [
+     "u22",
+     266,
+     815
+    ],
+    [
+     "k0",
+     371,
+     312
+    ],
+    [
+     "u24",
+     464,
+     173
+    ],
+    [
+     "u25",
+     256,
+     110
+    ],
+    [
+     "u26",
+     207,
+     891
+    ],
+    [
+     "u27",
+     190,
+     329
+    ],
+    [
+     "u28",
+     260,
+     39
+    ],
+    [
+     "k0",
+     177,
+     189
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1424
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 2096
+    },
+    {
+     "items": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "state": "full",
+     "stored": 1602
+    },
+    {
+     "items": [
+      11,
+      12,
+      13,
+      14
+     ],
+     "state": "full",
+     "stored": 2428
+    },
+    {
+     "items": [
+      15,
+      16,
+      17
+     ],
+     "state": "full",
+     "stored": 1744
+    },
+    {
+     "items": [
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1925
+    },
+    {
+     "items": [
+      20,
+      21
+     ],
+     "state": "full",
+     "stored": 2071
+    },
+    {
+     "items": [
+      22,
+      23,
+      24
+     ],
+     "state": "full",
+     "stored": 1101
+    },
+    {
+     "items": [
+      25,
+      26,
+      27,
+      28,
+      29
+     ],
+     "state": "ready",
+     "stored": 1090
+    }
+   ]
+  },
+  {
+   "name": "seeded 7 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     245,
+     710
+    ],
+    [
+     "k5",
+     980,
+     169
+    ],
+    [
+     "u2",
+     199,
+     211
+    ],
+    [
+     "u3",
+     235,
+     267
+    ],
+    [
+     "u4",
+     528,
+     333
+    ],
+    [
+     "u5",
+     1333,
+     465
+    ],
+    [
+     "u6",
+     176,
+     354
+    ],
+    [
+     "u7",
+     141,
+     263
+    ],
+    [
+     "u8",
+     204,
+     244
+    ],
+    [
+     "u9",
+     96,
+     300
+    ],
+    [
+     "u10",
+     985,
+     772
+    ],
+    [
+     "u11",
+     90,
+     449
+    ],
+    [
+     "u12",
+     624,
+     376
+    ],
+    [
+     "u13",
+     280,
+     662
+    ],
+    [
+     "u14",
+     1434,
+     471
+    ],
+    [
+     "u15",
+     558,
+     683
+    ],
+    [
+     "u16",
+     524,
+     263
+    ],
+    [
+     "u17",
+     662,
+     249
+    ],
+    [
+     "u18",
+     1316,
+     797
+    ],
+    [
+     "u19",
+     609,
+     5
+    ],
+    [
+     "u20",
+     801,
+     670
+    ],
+    [
+     "u21",
+     1270,
+     51
+    ],
+    [
+     "u22",
+     266,
+     815
+    ],
+    [
+     "k0",
+     371,
+     312
+    ],
+    [
+     "u24",
+     464,
+     173
+    ],
+    [
+     "u25",
+     256,
+     110
+    ],
+    [
+     "u26",
+     207,
+     891
+    ],
+    [
+     "u27",
+     190,
+     329
+    ],
+    [
+     "u28",
+     260,
+     39
+    ],
+    [
+     "k0",
+     177,
+     189
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1424
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 2096
+    },
+    {
+     "items": [
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "state": "full",
+     "stored": 1602
+    },
+    {
+     "items": [
+      11,
+      12,
+      13,
+      14
+     ],
+     "state": "full",
+     "stored": 2428
+    },
+    {
+     "items": [
+      15,
+      16,
+      17
+     ],
+     "state": "full",
+     "stored": 1744
+    },
+    {
+     "items": [
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1925
+    },
+    {
+     "items": [
+      20,
+      21
+     ],
+     "state": "full",
+     "stored": 2071
+    },
+    {
+     "items": [
+      22,
+      23,
+      24
+     ],
+     "state": "full",
+     "stored": 1101
+    },
+    {
+     "items": [
+      25,
+      26,
+      27,
+      28,
+      29
+     ],
+     "state": "ready",
+     "stored": 1090
+    }
+   ]
+  },
+  {
+   "name": "seeded 8 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "k4",
+     80,
+     231
+    ],
+    [
+     "u1",
+     104,
+     488
+    ],
+    [
+     "k2",
+     581,
+     354
+    ],
+    [
+     "u3",
+     81,
+     173
+    ],
+    [
+     "u4",
+     50,
+     286
+    ],
+    [
+     "u5",
+     1405,
+     495
+    ],
+    [
+     "u6",
+     475,
+     438
+    ],
+    [
+     "k4",
+     12,
+     666
+    ],
+    [
+     "u8",
+     840,
+     235
+    ],
+    [
+     "u9",
+     1314,
+     238
+    ],
+    [
+     "u10",
+     950,
+     808
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 2301
+    },
+    {
+     "items": [
+      6,
+      7,
+      8
+     ],
+     "state": "full",
+     "stored": 1327
+    },
+    {
+     "items": [
+      9,
+      10
+     ],
+     "state": "ready",
+     "stored": 2264
+    }
+   ]
+  },
+  {
+   "name": "seeded 8 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "k4",
+     80,
+     231
+    ],
+    [
+     "u1",
+     104,
+     488
+    ],
+    [
+     "k2",
+     581,
+     354
+    ],
+    [
+     "u3",
+     81,
+     173
+    ],
+    [
+     "u4",
+     50,
+     286
+    ],
+    [
+     "u5",
+     1405,
+     495
+    ],
+    [
+     "u6",
+     475,
+     438
+    ],
+    [
+     "k4",
+     12,
+     666
+    ],
+    [
+     "u8",
+     840,
+     235
+    ],
+    [
+     "u9",
+     1314,
+     238
+    ],
+    [
+     "u10",
+     950,
+     808
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 2301
+    },
+    {
+     "items": [
+      6,
+      7,
+      8
+     ],
+     "state": "full",
+     "stored": 1327
+    },
+    {
+     "items": [
+      9
+     ],
+     "state": "full",
+     "stored": 1314
+    },
+    {
+     "items": [
+      10
+     ],
+     "state": "under",
+     "stored": 950
+    }
+   ]
+  },
+  {
+   "name": "seeded 9 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     231,
+     511
+    ],
+    [
+     "k0",
+     410,
+     736
+    ],
+    [
+     "u2",
+     206,
+     480
+    ],
+    [
+     "u3",
+     225,
+     162
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "ready",
+     "stored": 1072
+    }
+   ]
+  },
+  {
+   "name": "seeded 9 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     231,
+     511
+    ],
+    [
+     "k0",
+     410,
+     736
+    ],
+    [
+     "u2",
+     206,
+     480
+    ],
+    [
+     "u3",
+     225,
+     162
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "ready",
+     "stored": 1072
+    }
+   ]
+  },
+  {
+   "name": "seeded 10 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     120,
+     454
+    ],
+    [
+     "u1",
+     997,
+     184
+    ],
+    [
+     "u2",
+     1362,
+     314
+    ],
+    [
+     "u3",
+     1417,
+     662
+    ],
+    [
+     "u4",
+     404,
+     163
+    ],
+    [
+     "u5",
+     874,
+     113
+    ],
+    [
+     "u6",
+     120,
+     555
+    ],
+    [
+     "k4",
+     1341,
+     446
+    ],
+    [
+     "u8",
+     542,
+     335
+    ],
+    [
+     "k6",
+     298,
+     278
+    ],
+    [
+     "u10",
+     1440,
+     877
+    ],
+    [
+     "u11",
+     768,
+     485
+    ],
+    [
+     "u12",
+     71,
+     366
+    ],
+    [
+     "u13",
+     1488,
+     488
+    ],
+    [
+     "u14",
+     121,
+     619
+    ],
+    [
+     "u15",
+     716,
+     84
+    ],
+    [
+     "u16",
+     208,
+     195
+    ],
+    [
+     "u17",
+     127,
+     133
+    ],
+    [
+     "k6",
+     61,
+     98
+    ],
+    [
+     "k6",
+     46,
+     509
+    ],
+    [
+     "k0",
+     244,
+     474
+    ],
+    [
+     "k3",
+     220,
+     345
+    ],
+    [
+     "u22",
+     764,
+     494
+    ],
+    [
+     "k1",
+     504,
+     357
+    ],
+    [
+     "k8",
+     239,
+     442
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      4
+     ],
+     "state": "full",
+     "stored": 1521
+    },
+    {
+     "items": [
+      2,
+      6,
+      9
+     ],
+     "state": "full",
+     "stored": 1780
+    },
+    {
+     "items": [
+      3,
+      8
+     ],
+     "state": "full",
+     "stored": 1959
+    },
+    {
+     "items": [
+      5,
+      7
+     ],
+     "state": "full",
+     "stored": 2215
+    },
+    {
+     "items": [
+      10,
+      12,
+      14
+     ],
+     "state": "full",
+     "stored": 1632
+    },
+    {
+     "items": [
+      11,
+      13
+     ],
+     "state": "full",
+     "stored": 2256
+    },
+    {
+     "items": [
+      15,
+      16,
+      17
+     ],
+     "state": "full",
+     "stored": 1051
+    },
+    {
+     "items": [
+      18,
+      20,
+      21,
+      22
+     ],
+     "state": "full",
+     "stored": 1289
+    },
+    {
+     "items": [
+      19,
+      23,
+      24
+     ],
+     "state": "under",
+     "stored": 789
+    }
+   ]
+  },
+  {
+   "name": "seeded 10 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     120,
+     454
+    ],
+    [
+     "u1",
+     997,
+     184
+    ],
+    [
+     "u2",
+     1362,
+     314
+    ],
+    [
+     "u3",
+     1417,
+     662
+    ],
+    [
+     "u4",
+     404,
+     163
+    ],
+    [
+     "u5",
+     874,
+     113
+    ],
+    [
+     "u6",
+     120,
+     555
+    ],
+    [
+     "k4",
+     1341,
+     446
+    ],
+    [
+     "u8",
+     542,
+     335
+    ],
+    [
+     "k6",
+     298,
+     278
+    ],
+    [
+     "u10",
+     1440,
+     877
+    ],
+    [
+     "u11",
+     768,
+     485
+    ],
+    [
+     "u12",
+     71,
+     366
+    ],
+    [
+     "u13",
+     1488,
+     488
+    ],
+    [
+     "u14",
+     121,
+     619
+    ],
+    [
+     "u15",
+     716,
+     84
+    ],
+    [
+     "u16",
+     208,
+     195
+    ],
+    [
+     "u17",
+     127,
+     133
+    ],
+    [
+     "k6",
+     61,
+     98
+    ],
+    [
+     "k6",
+     46,
+     509
+    ],
+    [
+     "k0",
+     244,
+     474
+    ],
+    [
+     "k3",
+     220,
+     345
+    ],
+    [
+     "u22",
+     764,
+     494
+    ],
+    [
+     "k1",
+     504,
+     357
+    ],
+    [
+     "k8",
+     239,
+     442
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      4
+     ],
+     "state": "full",
+     "stored": 1521
+    },
+    {
+     "items": [
+      2,
+      6,
+      9
+     ],
+     "state": "full",
+     "stored": 1780
+    },
+    {
+     "items": [
+      3,
+      8
+     ],
+     "state": "full",
+     "stored": 1959
+    },
+    {
+     "items": [
+      5,
+      7
+     ],
+     "state": "full",
+     "stored": 2215
+    },
+    {
+     "items": [
+      10,
+      12,
+      14
+     ],
+     "state": "full",
+     "stored": 1632
+    },
+    {
+     "items": [
+      11,
+      13
+     ],
+     "state": "full",
+     "stored": 2256
+    },
+    {
+     "items": [
+      15,
+      16,
+      17
+     ],
+     "state": "full",
+     "stored": 1051
+    },
+    {
+     "items": [
+      18,
+      20,
+      21,
+      22
+     ],
+     "state": "full",
+     "stored": 1289
+    },
+    {
+     "items": [
+      19,
+      23,
+      24
+     ],
+     "state": "under",
+     "stored": 789
+    }
+   ]
+  },
+  {
+   "name": "seeded 11 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     91,
+     505
+    ],
+    [
+     "u1",
+     584,
+     305
+    ],
+    [
+     "k8",
+     49,
+     24
+    ],
+    [
+     "k3",
+     1347,
+     268
+    ],
+    [
+     "u4",
+     546,
+     729
+    ],
+    [
+     "u5",
+     222,
+     543
+    ],
+    [
+     "u6",
+     591,
+     374
+    ],
+    [
+     "u7",
+     354,
+     227
+    ],
+    [
+     "u8",
+     1039,
+     582
+    ],
+    [
+     "k8",
+     185,
+     830
+    ],
+    [
+     "u10",
+     1342,
+     454
+    ],
+    [
+     "u11",
+     492,
+     421
+    ],
+    [
+     "u12",
+     312,
+     700
+    ],
+    [
+     "u13",
+     135,
+     834
+    ],
+    [
+     "u14",
+     608,
+     348
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 2071
+    },
+    {
+     "items": [
+      4,
+      5,
+      6
+     ],
+     "state": "full",
+     "stored": 1359
+    },
+    {
+     "items": [
+      7,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1578
+    },
+    {
+     "items": [
+      10,
+      11,
+      13,
+      12,
+      14
+     ],
+     "state": "ready",
+     "stored": 2889
+    }
+   ]
+  },
+  {
+   "name": "seeded 11 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     91,
+     505
+    ],
+    [
+     "u1",
+     584,
+     305
+    ],
+    [
+     "k8",
+     49,
+     24
+    ],
+    [
+     "k3",
+     1347,
+     268
+    ],
+    [
+     "u4",
+     546,
+     729
+    ],
+    [
+     "u5",
+     222,
+     543
+    ],
+    [
+     "u6",
+     591,
+     374
+    ],
+    [
+     "u7",
+     354,
+     227
+    ],
+    [
+     "u8",
+     1039,
+     582
+    ],
+    [
+     "k8",
+     185,
+     830
+    ],
+    [
+     "u10",
+     1342,
+     454
+    ],
+    [
+     "u11",
+     492,
+     421
+    ],
+    [
+     "u12",
+     312,
+     700
+    ],
+    [
+     "u13",
+     135,
+     834
+    ],
+    [
+     "u14",
+     608,
+     348
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 2071
+    },
+    {
+     "items": [
+      4,
+      5,
+      6
+     ],
+     "state": "full",
+     "stored": 1359
+    },
+    {
+     "items": [
+      7,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1578
+    },
+    {
+     "items": [
+      10,
+      11,
+      13
+     ],
+     "state": "full",
+     "stored": 1969
+    },
+    {
+     "items": [
+      12,
+      14
+     ],
+     "state": "under",
+     "stored": 920
+    }
+   ]
+  },
+  {
+   "name": "seeded 12 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     965,
+     789
+    ],
+    [
+     "k2",
+     282,
+     456
+    ],
+    [
+     "u2",
+     866,
+     815
+    ],
+    [
+     "u3",
+     272,
+     438
+    ],
+    [
+     "k2",
+     910,
+     856
+    ],
+    [
+     "u5",
+     1417,
+     588
+    ],
+    [
+     "u6",
+     299,
+     648
+    ],
+    [
+     "u7",
+     977,
+     624
+    ],
+    [
+     "k3",
+     169,
+     860
+    ],
+    [
+     "u9",
+     1300,
+     150
+    ],
+    [
+     "u10",
+     224,
+     286
+    ],
+    [
+     "k2",
+     1,
+     355
+    ],
+    [
+     "u12",
+     13,
+     265
+    ],
+    [
+     "u13",
+     10,
+     75
+    ],
+    [
+     "u14",
+     956,
+     332
+    ],
+    [
+     "k5",
+     171,
+     545
+    ],
+    [
+     "u16",
+     231,
+     77
+    ],
+    [
+     "k5",
+     517,
+     610
+    ],
+    [
+     "u18",
+     1018,
+     722
+    ],
+    [
+     "u19",
+     1165,
+     65
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      3
+     ],
+     "state": "full",
+     "stored": 1519
+    },
+    {
+     "items": [
+      2,
+      4,
+      8
+     ],
+     "state": "full",
+     "stored": 1945
+    },
+    {
+     "items": [
+      5,
+      6,
+      10
+     ],
+     "state": "full",
+     "stored": 1940
+    },
+    {
+     "items": [
+      7,
+      9
+     ],
+     "state": "full",
+     "stored": 2277
+    },
+    {
+     "items": [
+      11,
+      12,
+      13,
+      14,
+      15
+     ],
+     "state": "full",
+     "stored": 1151
+    },
+    {
+     "items": [
+      16,
+      17,
+      18
+     ],
+     "state": "full",
+     "stored": 1766
+    },
+    {
+     "items": [
+      19
+     ],
+     "state": "ready",
+     "stored": 1165
+    }
+   ]
+  },
+  {
+   "name": "seeded 12 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     965,
+     789
+    ],
+    [
+     "k2",
+     282,
+     456
+    ],
+    [
+     "u2",
+     866,
+     815
+    ],
+    [
+     "u3",
+     272,
+     438
+    ],
+    [
+     "k2",
+     910,
+     856
+    ],
+    [
+     "u5",
+     1417,
+     588
+    ],
+    [
+     "u6",
+     299,
+     648
+    ],
+    [
+     "u7",
+     977,
+     624
+    ],
+    [
+     "k3",
+     169,
+     860
+    ],
+    [
+     "u9",
+     1300,
+     150
+    ],
+    [
+     "u10",
+     224,
+     286
+    ],
+    [
+     "k2",
+     1,
+     355
+    ],
+    [
+     "u12",
+     13,
+     265
+    ],
+    [
+     "u13",
+     10,
+     75
+    ],
+    [
+     "u14",
+     956,
+     332
+    ],
+    [
+     "k5",
+     171,
+     545
+    ],
+    [
+     "u16",
+     231,
+     77
+    ],
+    [
+     "k5",
+     517,
+     610
+    ],
+    [
+     "u18",
+     1018,
+     722
+    ],
+    [
+     "u19",
+     1165,
+     65
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      3
+     ],
+     "state": "full",
+     "stored": 1519
+    },
+    {
+     "items": [
+      2,
+      4,
+      8
+     ],
+     "state": "full",
+     "stored": 1945
+    },
+    {
+     "items": [
+      5,
+      6,
+      10
+     ],
+     "state": "full",
+     "stored": 1940
+    },
+    {
+     "items": [
+      7,
+      9
+     ],
+     "state": "full",
+     "stored": 2277
+    },
+    {
+     "items": [
+      11,
+      12,
+      13,
+      14,
+      15
+     ],
+     "state": "full",
+     "stored": 1151
+    },
+    {
+     "items": [
+      16,
+      17,
+      18
+     ],
+     "state": "full",
+     "stored": 1766
+    },
+    {
+     "items": [
+      19
+     ],
+     "state": "ready",
+     "stored": 1165
+    }
+   ]
+  },
+  {
+   "name": "seeded 13 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "k8",
+     871,
+     416
+    ],
+    [
+     "k3",
+     50,
+     114
+    ],
+    [
+     "k5",
+     95,
+     507
+    ],
+    [
+     "u3",
+     251,
+     789
+    ],
+    [
+     "u4",
+     1409,
+     383
+    ],
+    [
+     "u5",
+     1075,
+     715
+    ],
+    [
+     "k4",
+     326,
+     688
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1016
+    },
+    {
+     "items": [
+      3,
+      4,
+      6
+     ],
+     "state": "full",
+     "stored": 1986
+    },
+    {
+     "items": [
+      5
+     ],
+     "state": "ready",
+     "stored": 1075
+    }
+   ]
+  },
+  {
+   "name": "seeded 13 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "k8",
+     871,
+     416
+    ],
+    [
+     "k3",
+     50,
+     114
+    ],
+    [
+     "k5",
+     95,
+     507
+    ],
+    [
+     "u3",
+     251,
+     789
+    ],
+    [
+     "u4",
+     1409,
+     383
+    ],
+    [
+     "u5",
+     1075,
+     715
+    ],
+    [
+     "k4",
+     326,
+     688
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1016
+    },
+    {
+     "items": [
+      3,
+      4,
+      6
+     ],
+     "state": "full",
+     "stored": 1986
+    },
+    {
+     "items": [
+      5
+     ],
+     "state": "ready",
+     "stored": 1075
+    }
+   ]
+  },
+  {
+   "name": "seeded 14 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     540,
+     574
+    ],
+    [
+     "u1",
+     200,
+     155
+    ],
+    [
+     "u2",
+     264,
+     319
+    ],
+    [
+     "u3",
+     315,
+     240
+    ],
+    [
+     "k7",
+     184,
+     37
+    ],
+    [
+     "u5",
+     648,
+     863
+    ],
+    [
+     "u6",
+     732,
+     301
+    ],
+    [
+     "u7",
+     140,
+     358
+    ],
+    [
+     "u8",
+     1312,
+     292
+    ],
+    [
+     "k5",
+     247,
+     111
+    ],
+    [
+     "u10",
+     192,
+     569
+    ],
+    [
+     "u11",
+     291,
+     250
+    ],
+    [
+     "u12",
+     60,
+     727
+    ],
+    [
+     "u13",
+     15,
+     438
+    ],
+    [
+     "u14",
+     135,
+     52
+    ],
+    [
+     "k9",
+     109,
+     275
+    ],
+    [
+     "u16",
+     65,
+     397
+    ],
+    [
+     "u17",
+     72,
+     83
+    ],
+    [
+     "u18",
+     1243,
+     121
+    ],
+    [
+     "u19",
+     1500,
+     797
+    ],
+    [
+     "u20",
+     225,
+     783
+    ],
+    [
+     "u21",
+     57,
+     652
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1004
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1147
+    },
+    {
+     "items": [
+      6,
+      7,
+      8
+     ],
+     "state": "full",
+     "stored": 2184
+    },
+    {
+     "items": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ],
+     "state": "full",
+     "stored": 1049
+    },
+    {
+     "items": [
+      16,
+      17,
+      18
+     ],
+     "state": "full",
+     "stored": 1380
+    },
+    {
+     "items": [
+      19,
+      20,
+      21
+     ],
+     "state": "ready",
+     "stored": 1782
+    }
+   ]
+  },
+  {
+   "name": "seeded 14 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     540,
+     574
+    ],
+    [
+     "u1",
+     200,
+     155
+    ],
+    [
+     "u2",
+     264,
+     319
+    ],
+    [
+     "u3",
+     315,
+     240
+    ],
+    [
+     "k7",
+     184,
+     37
+    ],
+    [
+     "u5",
+     648,
+     863
+    ],
+    [
+     "u6",
+     732,
+     301
+    ],
+    [
+     "u7",
+     140,
+     358
+    ],
+    [
+     "u8",
+     1312,
+     292
+    ],
+    [
+     "k5",
+     247,
+     111
+    ],
+    [
+     "u10",
+     192,
+     569
+    ],
+    [
+     "u11",
+     291,
+     250
+    ],
+    [
+     "u12",
+     60,
+     727
+    ],
+    [
+     "u13",
+     15,
+     438
+    ],
+    [
+     "u14",
+     135,
+     52
+    ],
+    [
+     "k9",
+     109,
+     275
+    ],
+    [
+     "u16",
+     65,
+     397
+    ],
+    [
+     "u17",
+     72,
+     83
+    ],
+    [
+     "u18",
+     1243,
+     121
+    ],
+    [
+     "u19",
+     1500,
+     797
+    ],
+    [
+     "u20",
+     225,
+     783
+    ],
+    [
+     "u21",
+     57,
+     652
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1004
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1147
+    },
+    {
+     "items": [
+      6,
+      7,
+      8
+     ],
+     "state": "full",
+     "stored": 2184
+    },
+    {
+     "items": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ],
+     "state": "full",
+     "stored": 1049
+    },
+    {
+     "items": [
+      16,
+      17,
+      18
+     ],
+     "state": "full",
+     "stored": 1380
+    },
+    {
+     "items": [
+      19,
+      20,
+      21
+     ],
+     "state": "ready",
+     "stored": 1782
+    }
+   ]
+  },
+  {
+   "name": "seeded 15 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     254,
+     836
+    ],
+    [
+     "u1",
+     182,
+     793
+    ],
+    [
+     "u2",
+     563,
+     46
+    ],
+    [
+     "k5",
+     1473,
+     40
+    ],
+    [
+     "u4",
+     338,
+     769
+    ],
+    [
+     "k9",
+     673,
+     50
+    ],
+    [
+     "u6",
+     996,
+     552
+    ],
+    [
+     "u7",
+     1333,
+     389
+    ],
+    [
+     "u8",
+     526,
+     147
+    ],
+    [
+     "u9",
+     38,
+     4
+    ],
+    [
+     "k3",
+     128,
+     119
+    ],
+    [
+     "u11",
+     115,
+     23
+    ],
+    [
+     "u12",
+     551,
+     559
+    ],
+    [
+     "u13",
+     84,
+     582
+    ],
+    [
+     "u14",
+     853,
+     137
+    ],
+    [
+     "u15",
+     621,
+     519
+    ],
+    [
+     "u16",
+     204,
+     413
+    ],
+    [
+     "u17",
+     519,
+     730
+    ],
+    [
+     "u18",
+     1480,
+     812
+    ],
+    [
+     "k4",
+     18,
+     729
+    ],
+    [
+     "u20",
+     1138,
+     681
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 2472
+    },
+    {
+     "items": [
+      4,
+      5,
+      8
+     ],
+     "state": "full",
+     "stored": 1537
+    },
+    {
+     "items": [
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 2329
+    },
+    {
+     "items": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+     ],
+     "state": "full",
+     "stored": 1769
+    },
+    {
+     "items": [
+      15,
+      16,
+      17
+     ],
+     "state": "full",
+     "stored": 1344
+    },
+    {
+     "items": [
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1498
+    },
+    {
+     "items": [
+      20
+     ],
+     "state": "ready",
+     "stored": 1138
+    }
+   ]
+  },
+  {
+   "name": "seeded 15 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     254,
+     836
+    ],
+    [
+     "u1",
+     182,
+     793
+    ],
+    [
+     "u2",
+     563,
+     46
+    ],
+    [
+     "k5",
+     1473,
+     40
+    ],
+    [
+     "u4",
+     338,
+     769
+    ],
+    [
+     "k9",
+     673,
+     50
+    ],
+    [
+     "u6",
+     996,
+     552
+    ],
+    [
+     "u7",
+     1333,
+     389
+    ],
+    [
+     "u8",
+     526,
+     147
+    ],
+    [
+     "u9",
+     38,
+     4
+    ],
+    [
+     "k3",
+     128,
+     119
+    ],
+    [
+     "u11",
+     115,
+     23
+    ],
+    [
+     "u12",
+     551,
+     559
+    ],
+    [
+     "u13",
+     84,
+     582
+    ],
+    [
+     "u14",
+     853,
+     137
+    ],
+    [
+     "u15",
+     621,
+     519
+    ],
+    [
+     "u16",
+     204,
+     413
+    ],
+    [
+     "u17",
+     519,
+     730
+    ],
+    [
+     "u18",
+     1480,
+     812
+    ],
+    [
+     "k4",
+     18,
+     729
+    ],
+    [
+     "u20",
+     1138,
+     681
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 2472
+    },
+    {
+     "items": [
+      4,
+      5,
+      8
+     ],
+     "state": "full",
+     "stored": 1537
+    },
+    {
+     "items": [
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 2329
+    },
+    {
+     "items": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+     ],
+     "state": "full",
+     "stored": 1769
+    },
+    {
+     "items": [
+      15,
+      16,
+      17
+     ],
+     "state": "full",
+     "stored": 1344
+    },
+    {
+     "items": [
+      18,
+      19
+     ],
+     "state": "full",
+     "stored": 1498
+    },
+    {
+     "items": [
+      20
+     ],
+     "state": "ready",
+     "stored": 1138
+    }
+   ]
+  },
+  {
+   "name": "seeded 16 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     145,
+     654
+    ],
+    [
+     "u1",
+     1086,
+     78
+    ],
+    [
+     "k0",
+     938,
+     490
+    ],
+    [
+     "u3",
+     745,
+     377
+    ],
+    [
+     "u4",
+     269,
+     750
+    ],
+    [
+     "k1",
+     197,
+     110
+    ],
+    [
+     "u6",
+     181,
+     410
+    ],
+    [
+     "u7",
+     624,
+     641
+    ],
+    [
+     "u8",
+     112,
+     229
+    ],
+    [
+     "u9",
+     1440,
+     189
+    ],
+    [
+     "u10",
+     5,
+     228
+    ],
+    [
+     "u11",
+     761,
+     679
+    ],
+    [
+     "u12",
+     210,
+     366
+    ],
+    [
+     "u13",
+     37,
+     222
+    ],
+    [
+     "u14",
+     9,
+     248
+    ],
+    [
+     "u15",
+     606,
+     562
+    ],
+    [
+     "u16",
+     76,
+     778
+    ],
+    [
+     "u17",
+     242,
+     68
+    ],
+    [
+     "k0",
+     96,
+     104
+    ],
+    [
+     "u19",
+     45,
+     211
+    ],
+    [
+     "u20",
+     69,
+     359
+    ],
+    [
+     "k4",
+     460,
+     476
+    ],
+    [
+     "k5",
+     1416,
+     548
+    ],
+    [
+     "u23",
+     1270,
+     885
+    ],
+    [
+     "u24",
+     1060,
+     388
+    ],
+    [
+     "u25",
+     48,
+     159
+    ],
+    [
+     "u26",
+     1154,
+     642
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      3
+     ],
+     "state": "full",
+     "stored": 1976
+    },
+    {
+     "items": [
+      2,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1404
+    },
+    {
+     "items": [
+      6,
+      7,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 2357
+    },
+    {
+     "items": [
+      10,
+      11,
+      12,
+      13
+     ],
+     "state": "full",
+     "stored": 1013
+    },
+    {
+     "items": [
+      14,
+      15,
+      16,
+      17,
+      18
+     ],
+     "state": "full",
+     "stored": 1029
+    },
+    {
+     "items": [
+      19,
+      20,
+      21,
+      22
+     ],
+     "state": "full",
+     "stored": 1990
+    },
+    {
+     "items": [
+      23,
+      25
+     ],
+     "state": "full",
+     "stored": 1318
+    },
+    {
+     "items": [
+      24
+     ],
+     "state": "full",
+     "stored": 1060
+    },
+    {
+     "items": [
+      26
+     ],
+     "state": "ready",
+     "stored": 1154
+    }
+   ]
+  },
+  {
+   "name": "seeded 16 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     145,
+     654
+    ],
+    [
+     "u1",
+     1086,
+     78
+    ],
+    [
+     "k0",
+     938,
+     490
+    ],
+    [
+     "u3",
+     745,
+     377
+    ],
+    [
+     "u4",
+     269,
+     750
+    ],
+    [
+     "k1",
+     197,
+     110
+    ],
+    [
+     "u6",
+     181,
+     410
+    ],
+    [
+     "u7",
+     624,
+     641
+    ],
+    [
+     "u8",
+     112,
+     229
+    ],
+    [
+     "u9",
+     1440,
+     189
+    ],
+    [
+     "u10",
+     5,
+     228
+    ],
+    [
+     "u11",
+     761,
+     679
+    ],
+    [
+     "u12",
+     210,
+     366
+    ],
+    [
+     "u13",
+     37,
+     222
+    ],
+    [
+     "u14",
+     9,
+     248
+    ],
+    [
+     "u15",
+     606,
+     562
+    ],
+    [
+     "u16",
+     76,
+     778
+    ],
+    [
+     "u17",
+     242,
+     68
+    ],
+    [
+     "k0",
+     96,
+     104
+    ],
+    [
+     "u19",
+     45,
+     211
+    ],
+    [
+     "u20",
+     69,
+     359
+    ],
+    [
+     "k4",
+     460,
+     476
+    ],
+    [
+     "k5",
+     1416,
+     548
+    ],
+    [
+     "u23",
+     1270,
+     885
+    ],
+    [
+     "u24",
+     1060,
+     388
+    ],
+    [
+     "u25",
+     48,
+     159
+    ],
+    [
+     "u26",
+     1154,
+     642
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      3
+     ],
+     "state": "full",
+     "stored": 1976
+    },
+    {
+     "items": [
+      2,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1404
+    },
+    {
+     "items": [
+      6,
+      7,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 2357
+    },
+    {
+     "items": [
+      10,
+      11,
+      12,
+      13
+     ],
+     "state": "full",
+     "stored": 1013
+    },
+    {
+     "items": [
+      14,
+      15,
+      16,
+      17,
+      18
+     ],
+     "state": "full",
+     "stored": 1029
+    },
+    {
+     "items": [
+      19,
+      20,
+      21,
+      22
+     ],
+     "state": "full",
+     "stored": 1990
+    },
+    {
+     "items": [
+      23,
+      25
+     ],
+     "state": "full",
+     "stored": 1318
+    },
+    {
+     "items": [
+      24
+     ],
+     "state": "full",
+     "stored": 1060
+    },
+    {
+     "items": [
+      26
+     ],
+     "state": "ready",
+     "stored": 1154
+    }
+   ]
+  },
+  {
+   "name": "seeded 17 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     160,
+     217
+    ],
+    [
+     "u1",
+     77,
+     579
+    ],
+    [
+     "k0",
+     94,
+     17
+    ],
+    [
+     "u3",
+     128,
+     187
+    ],
+    [
+     "u4",
+     72,
+     87
+    ],
+    [
+     "k9",
+     58,
+     64
+    ],
+    [
+     "k0",
+     52,
+     733
+    ],
+    [
+     "k2",
+     426,
+     267
+    ],
+    [
+     "u8",
+     118,
+     894
+    ],
+    [
+     "k4",
+     1252,
+     704
+    ],
+    [
+     "k1",
+     1436,
+     115
+    ],
+    [
+     "u11",
+     28,
+     693
+    ],
+    [
+     "u12",
+     630,
+     773
+    ],
+    [
+     "u13",
+     1407,
+     122
+    ],
+    [
+     "u14",
+     823,
+     628
+    ],
+    [
+     "u15",
+     800,
+     820
+    ],
+    [
+     "u16",
+     62,
+     383
+    ],
+    [
+     "u17",
+     96,
+     738
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      7
+     ],
+     "state": "full",
+     "stored": 1015
+    },
+    {
+     "items": [
+      6,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1422
+    },
+    {
+     "items": [
+      10,
+      11,
+      16
+     ],
+     "state": "full",
+     "stored": 1526
+    },
+    {
+     "items": [
+      12,
+      13
+     ],
+     "state": "full",
+     "stored": 2037
+    },
+    {
+     "items": [
+      14,
+      15,
+      17
+     ],
+     "state": "ready",
+     "stored": 1719
+    }
+   ]
+  },
+  {
+   "name": "seeded 17 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     160,
+     217
+    ],
+    [
+     "u1",
+     77,
+     579
+    ],
+    [
+     "k0",
+     94,
+     17
+    ],
+    [
+     "u3",
+     128,
+     187
+    ],
+    [
+     "u4",
+     72,
+     87
+    ],
+    [
+     "k9",
+     58,
+     64
+    ],
+    [
+     "k0",
+     52,
+     733
+    ],
+    [
+     "k2",
+     426,
+     267
+    ],
+    [
+     "u8",
+     118,
+     894
+    ],
+    [
+     "k4",
+     1252,
+     704
+    ],
+    [
+     "k1",
+     1436,
+     115
+    ],
+    [
+     "u11",
+     28,
+     693
+    ],
+    [
+     "u12",
+     630,
+     773
+    ],
+    [
+     "u13",
+     1407,
+     122
+    ],
+    [
+     "u14",
+     823,
+     628
+    ],
+    [
+     "u15",
+     800,
+     820
+    ],
+    [
+     "u16",
+     62,
+     383
+    ],
+    [
+     "u17",
+     96,
+     738
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      7
+     ],
+     "state": "full",
+     "stored": 1015
+    },
+    {
+     "items": [
+      6,
+      8,
+      9
+     ],
+     "state": "full",
+     "stored": 1422
+    },
+    {
+     "items": [
+      10,
+      11,
+      16
+     ],
+     "state": "full",
+     "stored": 1526
+    },
+    {
+     "items": [
+      12,
+      13
+     ],
+     "state": "full",
+     "stored": 2037
+    },
+    {
+     "items": [
+      14,
+      15,
+      17
+     ],
+     "state": "ready",
+     "stored": 1719
+    }
+   ]
+  },
+  {
+   "name": "seeded 18 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     1410,
+     900
+    ],
+    [
+     "u1",
+     182,
+     716
+    ],
+    [
+     "u2",
+     1136,
+     801
+    ],
+    [
+     "u3",
+     329,
+     710
+    ],
+    [
+     "u4",
+     135,
+     373
+    ],
+    [
+     "u5",
+     359,
+     861
+    ],
+    [
+     "k2",
+     124,
+     49
+    ],
+    [
+     "u7",
+     996,
+     340
+    ],
+    [
+     "k7",
+     12,
+     205
+    ],
+    [
+     "u9",
+     1080,
+     414
+    ],
+    [
+     "u10",
+     1033,
+     476
+    ],
+    [
+     "k6",
+     419,
+     115
+    ],
+    [
+     "u12",
+     256,
+     86
+    ],
+    [
+     "u13",
+     580,
+     377
+    ],
+    [
+     "k5",
+     1079,
+     286
+    ],
+    [
+     "u15",
+     688,
+     15
+    ],
+    [
+     "k2",
+     5,
+     719
+    ],
+    [
+     "u17",
+     195,
+     276
+    ],
+    [
+     "u18",
+     79,
+     602
+    ],
+    [
+     "u19",
+     735,
+     172
+    ],
+    [
+     "u20",
+     1371,
+     140
+    ],
+    [
+     "u21",
+     43,
+     445
+    ],
+    [
+     "u22",
+     200,
+     843
+    ],
+    [
+     "u23",
+     1297,
+     76
+    ],
+    [
+     "u24",
+     162,
+     131
+    ],
+    [
+     "u25",
+     1046,
+     31
+    ],
+    [
+     "u26",
+     359,
+     749
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      3
+     ],
+     "state": "full",
+     "stored": 1921
+    },
+    {
+     "items": [
+      2,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1630
+    },
+    {
+     "items": [
+      6,
+      7,
+      8
+     ],
+     "state": "full",
+     "stored": 1132
+    },
+    {
+     "items": [
+      9,
+      11,
+      12
+     ],
+     "state": "full",
+     "stored": 1755
+    },
+    {
+     "items": [
+      10,
+      13,
+      16
+     ],
+     "state": "full",
+     "stored": 1618
+    },
+    {
+     "items": [
+      14,
+      15,
+      17
+     ],
+     "state": "full",
+     "stored": 1962
+    },
+    {
+     "items": [
+      18,
+      19,
+      20
+     ],
+     "state": "full",
+     "stored": 2185
+    },
+    {
+     "items": [
+      21,
+      22,
+      23
+     ],
+     "state": "full",
+     "stored": 1540
+    },
+    {
+     "items": [
+      24,
+      25,
+      26
+     ],
+     "state": "ready",
+     "stored": 1567
+    }
+   ]
+  },
+  {
+   "name": "seeded 18 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     1410,
+     900
+    ],
+    [
+     "u1",
+     182,
+     716
+    ],
+    [
+     "u2",
+     1136,
+     801
+    ],
+    [
+     "u3",
+     329,
+     710
+    ],
+    [
+     "u4",
+     135,
+     373
+    ],
+    [
+     "u5",
+     359,
+     861
+    ],
+    [
+     "k2",
+     124,
+     49
+    ],
+    [
+     "u7",
+     996,
+     340
+    ],
+    [
+     "k7",
+     12,
+     205
+    ],
+    [
+     "u9",
+     1080,
+     414
+    ],
+    [
+     "u10",
+     1033,
+     476
+    ],
+    [
+     "k6",
+     419,
+     115
+    ],
+    [
+     "u12",
+     256,
+     86
+    ],
+    [
+     "u13",
+     580,
+     377
+    ],
+    [
+     "k5",
+     1079,
+     286
+    ],
+    [
+     "u15",
+     688,
+     15
+    ],
+    [
+     "k2",
+     5,
+     719
+    ],
+    [
+     "u17",
+     195,
+     276
+    ],
+    [
+     "u18",
+     79,
+     602
+    ],
+    [
+     "u19",
+     735,
+     172
+    ],
+    [
+     "u20",
+     1371,
+     140
+    ],
+    [
+     "u21",
+     43,
+     445
+    ],
+    [
+     "u22",
+     200,
+     843
+    ],
+    [
+     "u23",
+     1297,
+     76
+    ],
+    [
+     "u24",
+     162,
+     131
+    ],
+    [
+     "u25",
+     1046,
+     31
+    ],
+    [
+     "u26",
+     359,
+     749
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      3
+     ],
+     "state": "full",
+     "stored": 1921
+    },
+    {
+     "items": [
+      2,
+      4,
+      5
+     ],
+     "state": "full",
+     "stored": 1630
+    },
+    {
+     "items": [
+      6,
+      7,
+      8
+     ],
+     "state": "full",
+     "stored": 1132
+    },
+    {
+     "items": [
+      9,
+      11,
+      12
+     ],
+     "state": "full",
+     "stored": 1755
+    },
+    {
+     "items": [
+      10,
+      13,
+      16
+     ],
+     "state": "full",
+     "stored": 1618
+    },
+    {
+     "items": [
+      14,
+      15,
+      17
+     ],
+     "state": "full",
+     "stored": 1962
+    },
+    {
+     "items": [
+      18,
+      19,
+      20
+     ],
+     "state": "full",
+     "stored": 2185
+    },
+    {
+     "items": [
+      21,
+      22,
+      23
+     ],
+     "state": "full",
+     "stored": 1540
+    },
+    {
+     "items": [
+      24,
+      25,
+      26
+     ],
+     "state": "ready",
+     "stored": 1567
+    }
+   ]
+  },
+  {
+   "name": "seeded 19 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     46,
+     453
+    ],
+    [
+     "u1",
+     903,
+     499
+    ],
+    [
+     "k9",
+     2,
+     842
+    ],
+    [
+     "u3",
+     1134,
+     878
+    ],
+    [
+     "u4",
+     388,
+     492
+    ],
+    [
+     "u5",
+     128,
+     221
+    ],
+    [
+     "k7",
+     261,
+     523
+    ],
+    [
+     "u7",
+     180,
+     130
+    ],
+    [
+     "u8",
+     1163,
+     9
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 2085
+    },
+    {
+     "items": [
+      4,
+      5,
+      6,
+      7,
+      8
+     ],
+     "state": "ready",
+     "stored": 2120
+    }
+   ]
+  },
+  {
+   "name": "seeded 19 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     46,
+     453
+    ],
+    [
+     "u1",
+     903,
+     499
+    ],
+    [
+     "k9",
+     2,
+     842
+    ],
+    [
+     "u3",
+     1134,
+     878
+    ],
+    [
+     "u4",
+     388,
+     492
+    ],
+    [
+     "u5",
+     128,
+     221
+    ],
+    [
+     "k7",
+     261,
+     523
+    ],
+    [
+     "u7",
+     180,
+     130
+    ],
+    [
+     "u8",
+     1163,
+     9
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 2085
+    },
+    {
+     "items": [
+      4,
+      5,
+      6,
+      7,
+      8
+     ],
+     "state": "ready",
+     "stored": 2120
+    }
+   ]
+  },
+  {
+   "name": "seeded 20 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     231,
+     121
+    ],
+    [
+     "u1",
+     40,
+     543
+    ],
+    [
+     "u2",
+     154,
+     720
+    ],
+    [
+     "u3",
+     343,
+     414
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "under",
+     "stored": 768
+    }
+   ]
+  },
+  {
+   "name": "seeded 20 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     231,
+     121
+    ],
+    [
+     "u1",
+     40,
+     543
+    ],
+    [
+     "u2",
+     154,
+     720
+    ],
+    [
+     "u3",
+     343,
+     414
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "under",
+     "stored": 768
+    }
+   ]
+  },
+  {
+   "name": "seeded 21 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     1173,
+     529
+    ],
+    [
+     "u1",
+     238,
+     557
+    ],
+    [
+     "u2",
+     1366,
+     488
+    ],
+    [
+     "u3",
+     670,
+     793
+    ],
+    [
+     "k1",
+     272,
+     616
+    ],
+    [
+     "u5",
+     1364,
+     117
+    ],
+    [
+     "u6",
+     102,
+     443
+    ],
+    [
+     "k1",
+     147,
+     795
+    ],
+    [
+     "u8",
+     28,
+     417
+    ],
+    [
+     "u9",
+     15,
+     209
+    ],
+    [
+     "u10",
+     449,
+     148
+    ],
+    [
+     "u11",
+     134,
+     396
+    ],
+    [
+     "k2",
+     395,
+     791
+    ],
+    [
+     "u13",
+     192,
+     587
+    ],
+    [
+     "u14",
+     201,
+     684
+    ],
+    [
+     "k4",
+     696,
+     676
+    ],
+    [
+     "k6",
+     632,
+     148
+    ],
+    [
+     "u17",
+     180,
+     476
+    ],
+    [
+     "k2",
+     214,
+     741
+    ],
+    [
+     "u19",
+     184,
+     509
+    ],
+    [
+     "k7",
+     257,
+     762
+    ],
+    [
+     "u21",
+     1266,
+     454
+    ],
+    [
+     "u22",
+     396,
+     381
+    ],
+    [
+     "u23",
+     189,
+     256
+    ],
+    [
+     "u24",
+     78,
+     426
+    ],
+    [
+     "u25",
+     866,
+     27
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      4
+     ],
+     "state": "full",
+     "stored": 1683
+    },
+    {
+     "items": [
+      2,
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 1615
+    },
+    {
+     "items": [
+      3,
+      5
+     ],
+     "state": "full",
+     "stored": 2034
+    },
+    {
+     "items": [
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "state": "full",
+     "stored": 1021
+    },
+    {
+     "items": [
+      13,
+      14,
+      15
+     ],
+     "state": "full",
+     "stored": 1089
+    },
+    {
+     "items": [
+      16,
+      17,
+      18
+     ],
+     "state": "full",
+     "stored": 1026
+    },
+    {
+     "items": [
+      19,
+      20,
+      21
+     ],
+     "state": "full",
+     "stored": 1707
+    },
+    {
+     "items": [
+      22,
+      23,
+      24,
+      25
+     ],
+     "state": "ready",
+     "stored": 1529
+    }
+   ]
+  },
+  {
+   "name": "seeded 21 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     1173,
+     529
+    ],
+    [
+     "u1",
+     238,
+     557
+    ],
+    [
+     "u2",
+     1366,
+     488
+    ],
+    [
+     "u3",
+     670,
+     793
+    ],
+    [
+     "k1",
+     272,
+     616
+    ],
+    [
+     "u5",
+     1364,
+     117
+    ],
+    [
+     "u6",
+     102,
+     443
+    ],
+    [
+     "k1",
+     147,
+     795
+    ],
+    [
+     "u8",
+     28,
+     417
+    ],
+    [
+     "u9",
+     15,
+     209
+    ],
+    [
+     "u10",
+     449,
+     148
+    ],
+    [
+     "u11",
+     134,
+     396
+    ],
+    [
+     "k2",
+     395,
+     791
+    ],
+    [
+     "u13",
+     192,
+     587
+    ],
+    [
+     "u14",
+     201,
+     684
+    ],
+    [
+     "k4",
+     696,
+     676
+    ],
+    [
+     "k6",
+     632,
+     148
+    ],
+    [
+     "u17",
+     180,
+     476
+    ],
+    [
+     "k2",
+     214,
+     741
+    ],
+    [
+     "u19",
+     184,
+     509
+    ],
+    [
+     "k7",
+     257,
+     762
+    ],
+    [
+     "u21",
+     1266,
+     454
+    ],
+    [
+     "u22",
+     396,
+     381
+    ],
+    [
+     "u23",
+     189,
+     256
+    ],
+    [
+     "u24",
+     78,
+     426
+    ],
+    [
+     "u25",
+     866,
+     27
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      4
+     ],
+     "state": "full",
+     "stored": 1683
+    },
+    {
+     "items": [
+      2,
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 1615
+    },
+    {
+     "items": [
+      3,
+      5
+     ],
+     "state": "full",
+     "stored": 2034
+    },
+    {
+     "items": [
+      8,
+      9,
+      10,
+      11,
+      12
+     ],
+     "state": "full",
+     "stored": 1021
+    },
+    {
+     "items": [
+      13,
+      14,
+      15
+     ],
+     "state": "full",
+     "stored": 1089
+    },
+    {
+     "items": [
+      16,
+      17,
+      18
+     ],
+     "state": "full",
+     "stored": 1026
+    },
+    {
+     "items": [
+      19,
+      20,
+      21
+     ],
+     "state": "full",
+     "stored": 1707
+    },
+    {
+     "items": [
+      22,
+      23,
+      24,
+      25
+     ],
+     "state": "ready",
+     "stored": 1529
+    }
+   ]
+  },
+  {
+   "name": "seeded 22 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     29,
+     40
+    ],
+    [
+     "u1",
+     1149,
+     259
+    ],
+    [
+     "u2",
+     211,
+     403
+    ],
+    [
+     "u3",
+     17,
+     632
+    ],
+    [
+     "u4",
+     93,
+     277
+    ],
+    [
+     "u5",
+     968,
+     168
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1389
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "ready",
+     "stored": 1078
+    }
+   ]
+  },
+  {
+   "name": "seeded 22 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     29,
+     40
+    ],
+    [
+     "u1",
+     1149,
+     259
+    ],
+    [
+     "u2",
+     211,
+     403
+    ],
+    [
+     "u3",
+     17,
+     632
+    ],
+    [
+     "u4",
+     93,
+     277
+    ],
+    [
+     "u5",
+     968,
+     168
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2
+     ],
+     "state": "full",
+     "stored": 1389
+    },
+    {
+     "items": [
+      3,
+      4,
+      5
+     ],
+     "state": "ready",
+     "stored": 1078
+    }
+   ]
+  },
+  {
+   "name": "seeded 23 (run)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": true,
+   "items": [
+    [
+     "u0",
+     292,
+     302
+    ],
+    [
+     "u1",
+     61,
+     323
+    ],
+    [
+     "u2",
+     97,
+     121
+    ],
+    [
+     "u3",
+     681,
+     464
+    ],
+    [
+     "u4",
+     300,
+     814
+    ],
+    [
+     "u5",
+     122,
+     669
+    ],
+    [
+     "u6",
+     20,
+     876
+    ],
+    [
+     "u7",
+     1230,
+     780
+    ],
+    [
+     "k6",
+     163,
+     802
+    ],
+    [
+     "u9",
+     668,
+     586
+    ],
+    [
+     "u10",
+     13,
+     443
+    ],
+    [
+     "k6",
+     159,
+     679
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 1131
+    },
+    {
+     "items": [
+      4,
+      5,
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 1672
+    },
+    {
+     "items": [
+      8,
+      9,
+      10
+     ],
+     "state": "under",
+     "stored": 844
+    },
+    {
+     "items": [
+      11
+     ],
+     "state": "under",
+     "stored": 159
+    }
+   ]
+  },
+  {
+   "name": "seeded 23 (saves)",
+   "limits": {
+    "floor": 1000,
+    "ceiling": 2000,
+    "max_objects": 3,
+    "max_pack_objects": 8,
+    "request_budget": 10000,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "tail": false,
+   "items": [
+    [
+     "u0",
+     292,
+     302
+    ],
+    [
+     "u1",
+     61,
+     323
+    ],
+    [
+     "u2",
+     97,
+     121
+    ],
+    [
+     "u3",
+     681,
+     464
+    ],
+    [
+     "u4",
+     300,
+     814
+    ],
+    [
+     "u5",
+     122,
+     669
+    ],
+    [
+     "u6",
+     20,
+     876
+    ],
+    [
+     "u7",
+     1230,
+     780
+    ],
+    [
+     "k6",
+     163,
+     802
+    ],
+    [
+     "u9",
+     668,
+     586
+    ],
+    [
+     "u10",
+     13,
+     443
+    ],
+    [
+     "k6",
+     159,
+     679
+    ]
+   ],
+   "packs": [
+    {
+     "items": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "state": "full",
+     "stored": 1131
+    },
+    {
+     "items": [
+      4,
+      5,
+      6,
+      7
+     ],
+     "state": "full",
+     "stored": 1672
+    },
+    {
+     "items": [
+      8,
+      9,
+      10
+     ],
+     "state": "under",
+     "stored": 844
+    },
+    {
+     "items": [
+      11
+     ],
+     "state": "under",
+     "stored": 159
+    }
+   ]
+  }
+ ],
+ "planner_repeat": [
+  {
+   "name": "28.14: 128,535 files of 1 byte are one pack as a run; as saves the first pack takes 68,535",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "repeat": {
+    "count": 128535,
+    "key": "k{i}",
+    "stored": 153,
+    "request": 120
+   },
+   "run_pack_sizes": [
+    128535
+   ],
+   "saves_first_pack": 68535
+  }
+ ],
+ "decide": [
+  {
+   "name": "full: a slot is free",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "full",
+   "waiting": 12582912,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [],
+   "now": 0.0,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": null,
+    "at": 0.0
+   }
+  },
+  {
+   "name": "full: no slot",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "full",
+   "waiting": 12582912,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [],
+   "now": 0.0,
+   "slot_free": false,
+   "decision": {
+    "kind": "idle",
+    "reason": null,
+    "at": 0.0
+   }
+  },
+  {
+   "name": "request_limited goes with its reason",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "request_limited",
+   "waiting": 3145728,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [],
+   "now": 0.0,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": "request_limit",
+    "at": 0.0
+   }
+  },
+  {
+   "name": "ready: settling",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "ready",
+   "waiting": 12582912,
+   "oldest": 0.0,
+   "last": 1.0,
+   "arrivals": [],
+   "now": 1.125,
+   "slot_free": true,
+   "decision": {
+    "kind": "wait",
+    "reason": null,
+    "at": 1.25
+   }
+  },
+  {
+   "name": "ready: settled",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "ready",
+   "waiting": 12582912,
+   "oldest": 0.0,
+   "last": 1.0,
+   "arrivals": [],
+   "now": 1.25,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": null,
+    "at": 0.0
+   }
+  },
+  {
+   "name": "ready: the oldest waited the limit",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "ready",
+   "waiting": 12582912,
+   "oldest": 0.0,
+   "last": 4.875,
+   "arrivals": [],
+   "now": 5.0,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": null,
+    "at": 0.0
+   }
+  },
+  {
+   "name": "ready: settled, no slot",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "ready",
+   "waiting": 12582912,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [],
+   "now": 1.0,
+   "slot_free": false,
+   "decision": {
+    "kind": "idle",
+    "reason": null,
+    "at": 0.0
+   }
+  },
+  {
+   "name": "under: the limit passed",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "under",
+   "waiting": 1048576,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [],
+   "now": 5.0,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": "leftover",
+    "at": 0.0
+   }
+  },
+  {
+   "name": "under: the limit passed, no slot",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "under",
+   "waiting": 1048576,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [],
+   "now": 5.5,
+   "slot_free": false,
+   "decision": {
+    "kind": "idle",
+    "reason": null,
+    "at": 0.0
+   }
+  },
+  {
+   "name": "under: a lone save of 400 KB goes at once",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "under",
+   "waiting": 400000,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [],
+   "now": 0.0,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": "leftover",
+    "at": 0.0
+   }
+  },
+  {
+   "name": "under: a lone save of 9 MiB goes at once",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "under",
+   "waiting": 9437184,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [],
+   "now": 0.0,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": "leftover",
+    "at": 0.0
+   }
+  },
+  {
+   "name": "under: a steady stream waits until the earliest arrival leaves the window",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "under",
+   "waiting": 1048576,
+   "oldest": 0.0,
+   "last": 0.875,
+   "arrivals": [
+    [
+     0.25,
+     1048576
+    ],
+    [
+     0.5,
+     1048576
+    ],
+    [
+     0.875,
+     1048576
+    ]
+   ],
+   "now": 1.0,
+   "slot_free": true,
+   "decision": {
+    "kind": "wait",
+    "reason": null,
+    "at": 1.25
+   }
+  },
+  {
+   "name": "under: too little arriving goes now",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "under",
+   "waiting": 1048576,
+   "oldest": 0.0,
+   "last": 0.875,
+   "arrivals": [
+    [
+     0.5,
+     1048576
+    ],
+    [
+     0.875,
+     1048576
+    ]
+   ],
+   "now": 1.0,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": "leftover",
+    "at": 0.0
+   }
+  },
+  {
+   "name": "under: arrivals older than the window don't count",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "under",
+   "waiting": 1048576,
+   "oldest": 0.0,
+   "last": 0.0,
+   "arrivals": [
+    [
+     -1.5,
+     9437184
+    ]
+   ],
+   "now": 0.5,
+   "slot_free": true,
+   "decision": {
+    "kind": "send",
+    "reason": "leftover",
+    "at": 0.0
+   }
+  },
+  {
+   "name": "under: a stream with the limit near waits until the limit",
+   "limits": {
+    "floor": 10485760,
+    "ceiling": 20971520,
+    "max_objects": 10000,
+    "max_pack_objects": 140000,
+    "request_budget": 67108352,
+    "wait": 5.0,
+    "window": 1.0,
+    "settle": 0.25
+   },
+   "state": "under",
+   "waiting": 9437184,
+   "oldest": 0.0,
+   "last": 4.5,
+   "arrivals": [
+    [
+     4.25,
+     2097152
+    ],
+    [
+     4.5,
+     2097152
+    ]
+   ],
+   "now": 4.75,
+   "slot_free": true,
+   "decision": {
+    "kind": "wait",
+    "reason": null,
+    "at": 5.0
+   }
+  }
+ ]
+}

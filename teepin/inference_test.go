@@ -100,7 +100,7 @@ func TestListModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.requests[0].URL.Path != "/v1/models" || f.requests[0].Header.Get("Authorization") != "Bearer tpk_test" {
+	if f.requests[0].URL.Path != "/v1/models" || f.requests[0].Header.Get("Authorization") != "Bearer tpk_test" || f.requests[0].Header.Get("X-Teepin-Client") != "teepin-go/"+Version {
 		t.Errorf("request %s %v", f.requests[0].URL, f.requests[0].Header)
 	}
 	if len(models) != 2 || models[0].ContextWindow != 131072 || !models[0].SupportsTools || models[0].Pricing.OutputPerMillionTokens != 1.5 {

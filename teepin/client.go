@@ -35,8 +35,8 @@ import (
 	"github.com/FlashbackAi/teepin-go/teepin/internal/journal"
 )
 
-// Version is this SDK's version, sent in the User-Agent.
-const Version = "0.3.0"
+// Version is this SDK's version, sent in the User-Agent and as X-Teepin-Client.
+const Version = "0.4.0-rc.1"
 
 const (
 	// DefaultBaseURL is the public API.
@@ -350,6 +350,8 @@ func (c *Client) sendOnce(ctx context.Context, r *request, payload []byte) (*htt
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("User-Agent", c.userAgent)
+	// X-Teepin-Client names the SDK on every call (TEEPIN-STORAGE-DESIGN.md 28.15), whatever User-Agent says.
+	req.Header.Set("X-Teepin-Client", "teepin-go/"+Version)
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}

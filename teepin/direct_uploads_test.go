@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -358,9 +359,7 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 func TestPut_QueuedBehindARunIsDispatchedWhenTheRunsPackFreesItsSlot(t *testing.T) {
 	e, _ := newUploads(t)
 	c := e.client(Config{UploadConcurrency: 1})
-	sizes := testSizes
-	sizes.PackMaxObjects = 1
-	c.Storage.uploads().Sizes = sizes
+	c.Storage.uploads().Limits = oneFileAPack
 	files := e.writeFiles(6, 1000, "f")
 	e.f.Network.Do(func() { e.f.Network.Delay = 200 * time.Millisecond })
 	runDone := make(chan time.Time, 1)
@@ -596,14 +595,21 @@ func TestFaults_PassingFaultsEndSavedExactlyOnce(t *testing.T) {
 					t.Fatalf("the commit found it, yet it was sent %d times", puts)
 				}
 			case "PUT dropped before storing":
-				// An unknown outcome: one commit shows the pack isn't there, then the same bytes go again at once.
-				if puts < 2 || e.f.API.HitsOf("POST pack commit") != 2 {
+				// An unknown outcome (section 28.18): commit is asked again after 250 ms, 500 ms, 1 s and 2 s, then
+				// once more as 5 s since the upload come, and the same bytes go again; the next commit finds them.
+				if puts != 2 || e.f.API.HitsOf("POST pack commit") != 7 {
 					t.Fatalf("%d PUTs, %d commits", puts, e.f.API.HitsOf("POST pack commit"))
 				}
+				var looks []time.Duration
 				for _, d := range e.slept() {
-					if d == time.Second {
-						t.Fatal("it waited on verifying before sending again")
+					switch d {
+					case 250 * time.Millisecond, 500 * time.Millisecond, time.Second, 1250 * time.Millisecond, 2 * time.Second:
+						looks = append(looks, d)
 					}
+				}
+				if want := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second,
+					1250 * time.Millisecond}; !slices.Equal(looks, want) {
+					t.Fatalf("looks %v, want %v", looks, want)
 				}
 			case "PUT busy":
 				if puts < 2 {
@@ -733,7 +739,12 @@ func TestFaults_FinalFaultsFailTheirFilesNeverInALoop(t *testing.T) {
 
 func TestRuns_SaveEveryFileAndLeaveNothingBehind(t *testing.T) {
 	e, c := newUploads(t)
-	files := e.writeFiles(12, 200_000, "f") // 2.4 MB: packs of 1 MiB at most
+	// Section 28 with a floor of 512 KiB and a ceiling of 1 MiB: five files fill the first pack; the seven left are over
+	// the floor, so the second takes five and its two left are a tail it takes too. Two packs, both over the floor.
+	l := direct.DefaultLimits
+	l.Floor, l.Ceiling = 512*kib, 1<<20
+	c.Storage.uploads().Limits = l
+	files := e.writeFiles(12, 200_000, "f")
 	var paths []string
 	var total int64
 	for _, f := range files {
@@ -760,8 +771,8 @@ func TestRuns_SaveEveryFileAndLeaveNothingBehind(t *testing.T) {
 		}
 	}
 	e.assertSavedOnce(files)
-	if n := e.packs(""); n < 2 || n >= 12 {
-		t.Fatalf("%d packs", n)
+	if n := e.packs(""); n != 2 {
+		t.Fatalf("%d packs, want 2", n)
 	}
 	if last != [2]int64{total, total} {
 		t.Fatalf("progress ended at %v of %d", last, total)
@@ -833,6 +844,10 @@ func TestRuns_FailAFileThatChangesAlone(t *testing.T) {
 		}
 	}
 	e.assertSavedOnce(rest)
+	// The changed file's pack gave the others back (section 28.5): its reservation released, one pack sent.
+	if released := len(e.packsWhere(func(p *fakes.Pack) bool { return p.Released })); e.packs("sealed") != 1 || released != 1 {
+		t.Fatalf("%d sealed, %d released", e.packs("sealed"), released)
+	}
 }
 
 func TestRuns_FailAnUnreadableFileAlone(t *testing.T) {
@@ -1148,9 +1163,7 @@ func TestCrash_CleansOnlyOldRunsAndSaysSo(t *testing.T) {
 // slowRun is n files, one a pack, and a cleanup cap shorter than a request to the storage network.
 func slowRun(e *upEnv, c *Client, n int) []srcFile {
 	up := c.Storage.uploads()
-	s := testSizes
-	s.PackMaxObjects = 1
-	up.Sizes = s
+	up.Limits = oneFileAPack
 	up.CleanupCap = 500 * time.Millisecond
 	return e.writeFiles(n, 200_000, "f")
 }

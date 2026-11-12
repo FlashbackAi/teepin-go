@@ -150,6 +150,13 @@ type Pack struct {
 	Parsed map[string]any
 	Result map[string]any
 	Signs  int
+	// What the reserve recorded (section 28.16): the reason for a pack under the floor, the client's name, and the
+	// pack's stored size as declared.
+	UnderFloor string
+	Client     string
+	Packed     int64
+	// Released is set when the client gave the reservation up (section 28.23).
+	Released bool
 }
 
 // DirectUpload is a large upload in parts, straight to the storage network.
@@ -254,6 +261,9 @@ type Direct struct {
 	MinPartBytes     int64
 	UploadTTL        time.Duration
 
+	// PackLimits is the reserve answer's limits (section 28.15): nil sends none, as a server before section 28.
+	PackLimits map[string]any
+
 	// Skew is added to the clock (expiries); the storage network has its own.
 	Skew time.Duration
 	// Metered is the bytes signed for reading, as the control plane meters them (D6).
@@ -275,7 +285,7 @@ func StartDirect(api *API, network *Network) *Direct {
 	d := &Direct{api: api, Network: network, ownNetwork: own, AccountID: newUUID(), PrivateKey: priv, PublicKey: pub,
 		KeyVersion: 1, Backend: "fake", Packs: map[string]*Pack{}, packIdem: map[string][2]string{},
 		Uploads: map[string]*DirectUpload{}, uploadIdem: map[string][2]string{},
-		MaxPackBytes: 64 << 20, MaxPackObjects: 1000, MaxReservedPacks: 64, ReserveTTL: time.Hour,
+		MaxPackBytes: 64 << 20, MaxPackObjects: 140000, MaxReservedPacks: 64, ReserveTTL: time.Hour,
 		ReadWindow: 64 << 20, MaxReadBatch: 1000, MaxOpenUploads: 32, MaxParts: 3000, MinPartBytes: MinPartBytes,
 		UploadTTL: 7 * 24 * time.Hour}
 	api.Do(func() { api.Direct = d })
@@ -414,6 +424,8 @@ func (d *Direct) route(ex *exchange, bucket string, seg []string) *reply {
 		return d.signPack(ex, bucket, seg[1])
 	case len(seg) == 3 && seg[0] == "packs" && seg[2] == "commit" && m == http.MethodPost:
 		return d.commitPack(bucket, seg[1])
+	case len(seg) == 3 && seg[0] == "packs" && seg[2] == "release" && m == http.MethodPost:
+		return d.releasePack(bucket, seg[1])
 	case path == "object/read" && m == http.MethodPost:
 		return d.readOne(ex, bucket)
 	case path == "objects/read" && m == http.MethodPost:
@@ -456,7 +468,24 @@ func (d *Direct) reservation(p *Pack) map[string]any {
 	for _, s := range p.Slots {
 		objects = append(objects, map[string]any{"key": s.Key, "object_id": s.ObjectID})
 	}
-	return map[string]any{"pack": p.ID, "expires_at": iso(p.Expires), "account_key": d.AccountKey(), "objects": objects}
+	out := map[string]any{"pack": p.ID, "expires_at": iso(p.Expires), "account_key": d.AccountKey(), "objects": objects}
+	if d.PackLimits != nil {
+		out["limits"] = d.PackLimits
+	}
+	return out
+}
+
+// releasePack frees a reservation the client gave up (section 28.23).
+func (d *Direct) releasePack(bucket, pid string) *reply {
+	p, rep := d.pack(bucket, pid)
+	if rep != nil {
+		return rep
+	}
+	if p.Status == "sealed" {
+		return apiError(http.StatusConflict, "pack_committed", nil, map[string]any{"pack": p.ID})
+	}
+	p.Status, p.Released = "abandoned", true
+	return jsonReply(http.StatusOK, map[string]any{"status": "abandoned"}, nil)
 }
 
 func invalid(message string) *reply {
@@ -475,6 +504,11 @@ func (d *Direct) reserve(ex *exchange, bucket string) *reply {
 	}
 	if len(objects) < 1 || len(objects) > d.MaxPackObjects {
 		return invalid(fmt.Sprintf("a pack holds 1 to %d objects", d.MaxPackObjects))
+	}
+	reason, hasReason := req["under_floor"]
+	underFloor, _ := reason.(string)
+	if hasReason && underFloor != "leftover" && underFloor != "slow_link" && underFloor != "request_limit" {
+		return invalid("under_floor must be leftover, slow_link or request_limit")
 	}
 	keys := map[string]bool{}
 	var packed int64
@@ -528,7 +562,7 @@ func (d *Direct) reserve(ex *exchange, bucket string) *reply {
 				IfMatch: stripQuotes(str(o["if_match"]))})
 		}
 		p := &Pack{ID: newUUID(), Key: "p/" + b32(), Bucket: bucket, Slots: slots, Digest: digest, Status: "reserved",
-			Expires: d.after(d.ReserveTTL)}
+			Expires: d.after(d.ReserveTTL), UnderFloor: underFloor, Client: ex.header["x-teepin-client"], Packed: packed}
 		d.Packs[p.ID] = p
 		d.packIdem[idem] = [2]string{digest, p.ID}
 		out = d.reservation(p)

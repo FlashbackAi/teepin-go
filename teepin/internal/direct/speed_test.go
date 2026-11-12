@@ -111,35 +111,49 @@ func TestSpeedMeter_TakesATimeoutAsAnUpperBoundThatOnlyLowersIt(t *testing.T) {
 	}
 }
 
-func TestPackTarget_ShrinksToWhatTheSpeedCarriesInFourMinutesToAFloor(t *testing.T) {
+func TestPackLimits_ShrinkToWhatTheSpeedCarriesInFourMinutes(t *testing.T) {
+	// Section 28.7: a normal speed keeps the limits; between the floor and the ceiling, the ceiling comes down;
+	// under the floor, packs shrink to what 240 s carries (never below one segment).
+	l := DefaultLimits
 	for _, c := range []struct {
-		link *LinkSpeed
-		want int64
+		link    *LinkSpeed
+		ceiling int64
+		slow    bool
 	}{
-		{nil, 9 * mib},                       // nothing measured: the default
-		{at(100 * mib), 9 * mib},             // a normal speed keeps the default
-		{at(20 * kib), 20 * kib * 240},       // 4,800 KiB
-		{at(1), PackMinTarget},               // never below one segment
-		{at(64*kib/240.0 + 1), 64*kib + 240}, // just over the floor
+		{nil, DefaultPackCeiling, false},
+		{at(100 * mib), DefaultPackCeiling, false},
+		{at(64 * kib), 64 * kib * 240, false}, // 15 MiB: between the floor and the ceiling
+		{at(20 * kib), 20 * kib * 240, true},  // 4,800 KiB
+		{at(1), SlowMin, true},
 	} {
-		if got := PackTargetAt(c.link, PackTargetBytes, PackMinTarget); got != c.want {
-			t.Errorf("%+v: %d, want %d", c.link, got, c.want)
+		rb := int64(-1)
+		if c.link != nil {
+			rb = c.link.RequestBytes()
+		}
+		got, slow := l.AtSpeed(rb)
+		if got.Ceiling != c.ceiling || slow != c.slow {
+			t.Errorf("%+v: ceiling %d slow %v, want %d %v", c.link, got.Ceiling, slow, c.ceiling, c.slow)
 		}
 	}
-	if PackMinTarget != tws1.SegmentSize {
-		t.Fatal(PackMinTarget)
+	if SlowMin != tws1.SegmentSize {
+		t.Fatal(SlowMin)
 	}
 }
 
-func TestNextPack_StillPacksEveryFileAndSmallFilesTogetherHoweverSlow(t *testing.T) {
-	items := []item{{"a", 100 * kib}, {"b", 1000}, {"c", 1000}}
-	target := PackTargetAt(at(1), PackTargetBytes, PackMinTarget)
-	if got := plan(items, target, PackMaxObjects); !eqPlans(got, [][]string{{"a102400"}, {"b1000", "c1000"}}) {
-		t.Fatalf("%v", got)
+func TestPlanPack_StillPacksEveryFileAndSmallFilesTogetherHoweverSlow(t *testing.T) {
+	type item struct {
+		key  string
+		size int64
 	}
-	first, rest := NextPack(items, func(i item) int64 { return i.size }, func(i item) string { return i.key }, target, PackMaxObjects)
-	if len(first) != 1 || first[0].key != "a" || len(rest) != 2 {
-		t.Fatalf("%v %v", first, rest)
+	items := []item{{"a", 100 * kib}, {"b", 1000}, {"c", 1000}}
+	l, _ := DefaultLimits.AtSpeed(at(1).RequestBytes())
+	stored := func(i item) int64 { return i.size }
+	key := func(i item) string { return i.key }
+	req := func(item) int64 { return 50 }
+	first := PlanPack(items, stored, key, req, l, true)
+	second := PlanPack(first.Rest, stored, key, req, l, true)
+	if len(first.Pack) != 1 || first.Pack[0].key != "a" || len(second.Pack) != 2 || len(second.Rest) != 0 {
+		t.Fatalf("%v then %v", first.Pack, second.Pack)
 	}
 }
 

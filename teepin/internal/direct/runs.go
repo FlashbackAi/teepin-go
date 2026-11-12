@@ -482,6 +482,9 @@ func emptyPutFinal(err error) bool { return !(IsPassing(err) || stopsRun(err)) }
 
 func (u *Uploads) sendRun(ctx context.Context, state *runState, progress func(done, total int64), partSize int64) ([]UploadResult, error) {
 	store := state.store
+	for i, it := range state.items {
+		it.order = i
+	}
 	lim := u.PackObjectLimit()
 	// A file whose upload in parts a crash left open goes on in parts, whatever the speed now (section 22.7).
 	inParts := map[string]bool{}
@@ -600,28 +603,99 @@ func (u *Uploads) sendRun(ctx context.Context, state *runState, progress func(do
 		}
 		return true
 	}
+	// Files a pack gives back (a changed file's pack, a renewal under the floor) are planned again with the rest, their
+	// place in the run kept (section 28.5).
+	var back []*packItem
+	giveBack := func(items []*packItem) {
+		mu.Lock()
+		back = append(back, items...)
+		mu.Unlock()
+	}
 	start := func(p *pack) {
+		p.giveback = giveBack
 		closer.started()
 		wg.Add(1)
 		go packTask(p)
 	}
-	for _, p := range slices.Clone(packs) {
+	// waitAll waits for every pack goroutine started so far, or the run's stop; takeBack is what they gave back.
+	waitAll := func() {
+		// A goroutine that fails stops the run at once (its context is cancelled), as joining it first would.
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			stopNow = interrupted()
+		case <-rctx.Done():
+			stopNow = interrupted()
+			if stopNow == nil {
+				stopNow = rctx.Err()
+			}
+		}
+	}
+	takeBack := func() []*packItem {
+		mu.Lock()
+		defer mu.Unlock()
+		again := back
+		back = nil
+		return again
+	}
+	byOrder := func(items []*packItem) {
+		sort.SliceStable(items, func(i, j int) bool { return items[i].order < items[j].order })
+	}
+	// A first round dissolves the resumed packs under the floor (section 28.22, point 5), so their files are planned
+	// with the queued ones; the other resumed packs and the queued files wait for it.
+	var dissolving, others []*pack
+	for _, p := range packs {
+		if p.dissolve {
+			dissolving = append(dissolving, p)
+		} else {
+			others = append(others, p)
+		}
+	}
+	for _, p := range dissolving {
 		if !slot() {
 			break
 		}
 		start(p)
 	}
-	for rest := small; stopNow == nil && len(rest) > 0; {
-		if !slot() {
+	if len(dissolving) > 0 && stopNow == nil {
+		waitAll()
+		if stopNow == nil {
+			small = append(takeBack(), small...)
+			byOrder(small)
+		}
+	}
+	for _, p := range others {
+		if stopNow != nil || !slot() {
 			break
 		}
-		var chunk []*packItem
-		chunk, rest = NextPack(rest, func(i *packItem) int64 { return i.size }, func(i *packItem) string { return i.key },
-			u.PackTarget(), u.Sizes.PackMaxObjects)
-		p := newPack(state.bucket, chunk, store, "")
-		packs = append(packs, p)
 		start(p)
 	}
+	// planSmall starts a pack for each slot that comes free, planned at the speed measured by then, the run's tail
+	// joining its last pack (section 28.5).
+	planSmall := func(rest []*packItem) {
+		for stopNow == nil && len(rest) > 0 {
+			if !slot() {
+				break
+			}
+			limits, slow := u.limits().AtSpeed(u.requestBytes())
+			plan := PlanPack(rest, itemStored, itemKey, itemRequest, limits, true)
+			rest = plan.Rest
+			p := newPack(state.bucket, plan.Pack, store, "")
+			u.mu.Lock()
+			p.underFloor = u.reasonFor(plan, ReasonLeftover, slow)
+			u.mu.Unlock()
+			for _, it := range plan.Pack {
+				p.rebuilds = max(p.rebuilds, it.rebuilds)
+			}
+			packs = append(packs, p)
+			start(p)
+		}
+	}
+	planSmall(small)
 	if stopNow == nil {
 		for _, it := range big {
 			if se := stopped(); se != nil {
@@ -667,22 +741,14 @@ func (u *Uploads) sendRun(ctx context.Context, state *runState, progress func(do
 			}
 		}
 	}
-	if stopNow == nil {
-		// A goroutine that fails stops the run at once (its context is cancelled), as joining it first would.
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-			stopNow = interrupted()
-		case <-rctx.Done():
-			stopNow = interrupted()
-			if stopNow == nil {
-				stopNow = rctx.Err()
-			}
+	for stopNow == nil {
+		waitAll()
+		again := takeBack()
+		if stopNow != nil || len(again) == 0 {
+			break
 		}
+		byOrder(again)
+		planSmall(again)
 	}
 	if stopNow != nil {
 		// Interrupted, or failed: every pack still under way is stopped and waited for (up to the cap); then the run's
@@ -1026,7 +1092,7 @@ func (u *Uploads) readRun(store *runStore) (*runState, []doneItem, error) {
 		if err := json.Unmarshal(raw, &r); err != nil {
 			return nil, nil, &stateError{err}
 		}
-		if r.State == "committed" || r.State == "failed" {
+		if r.State == "committed" || r.State == "failed" || r.State == "returned" {
 			continue
 		}
 		its := byPack[r.ID]
@@ -1052,14 +1118,43 @@ func (u *Uploads) readRun(store *runStore) (*runState, []doneItem, error) {
 		if p.state == "uploading" {
 			p.state = "unknown" // the PUT may have landed: commit first
 		}
+		// Not yet signed and under the floor (section 28.22, point 5): its files are planned again, once its
+		// idempotency key has shown it wasn't committed (dissolvePack).
+		if unsigned[p.state] {
+			var stored int64
+			for _, it := range its {
+				stored += it.stored()
+			}
+			p.dissolve = stored < u.limits().Floor
+		}
 		state.packs = append(state.packs, p)
 	}
 	for _, id := range packOrder { // packed into a pack that's gone: queue them again
 		state.items = append(state.items, byPack[id]...)
 	}
+	// Dissolving gains nothing when there is nothing to merge with: a lone small pack would be planned again as the
+	// same leftover, and carrying on under its own idempotency key keeps a restored older journal from sending its
+	// files twice.
+	dissolving := 0
+	for _, p := range state.packs {
+		if p.dissolve {
+			dissolving++
+		}
+	}
+	if len(state.items) > 0 {
+		dissolving++
+	}
+	if dissolving < 2 {
+		for _, p := range state.packs {
+			p.dissolve = false
+		}
+	}
 	u.sweepOrphans(store, state.packs)
 	return state, changed, nil
 }
+
+// unsigned are a pack's states before its first signature: its bytes can't be on the storage network yet.
+var unsigned = map[string]bool{"new": true, "reserved": true, "built": true, "conflict": true, "bad": true}
 
 // sweepOrphans deletes the pack files the journal doesn't name, and the data keys of uploads that have ended
 // (section 17.12, E3).

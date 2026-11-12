@@ -6,7 +6,6 @@ package direct
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -25,65 +24,7 @@ import (
 
 const mib = 1 << 20
 
-type item struct {
-	key  string
-	size int64
-}
-
-func plan(items []item, target int64, maxObjects int) [][]string {
-	var out [][]string
-	for _, p := range PlanPacks(items, func(i item) int64 { return i.size }, func(i item) string { return i.key }, target, maxObjects) {
-		var keys []string
-		for _, i := range p {
-			keys = append(keys, fmt.Sprintf("%s%d", i.key, i.size))
-		}
-		out = append(out, keys)
-	}
-	return out
-}
-
-func eqPlans(a, b [][]string) bool {
-	return slices.EqualFunc(a, b, func(x, y []string) bool { return slices.Equal(x, y) })
-}
-
-func TestPlanPacks_ClosesAPackAtTheTargetSizeAndKeepsTheOrder(t *testing.T) {
-	each := tws1.NeedleHeaderSize + tws1.StoredSize(1000)
-	items := []item{{"a", 1000}, {"b", 1000}, {"c", 1000}, {"d", 1000}, {"e", 1000}}
-	if got := plan(items, each*2, PackMaxObjects); !eqPlans(got, [][]string{{"a1000", "b1000"}, {"c1000", "d1000"}, {"e1000"}}) {
-		t.Fatal(got)
-	}
-}
-
-func TestPlanPacks_ClosesAPackAtTheMostObjects(t *testing.T) {
-	if got := plan([]item{{"a", 1}, {"b", 1}, {"c", 1}}, PackTargetBytes, 2); !eqPlans(got, [][]string{{"a1", "b1"}, {"c1"}}) {
-		t.Fatal(got)
-	}
-}
-
-func TestPlanPacks_GivesAnItemOverTheTargetAPackOfItsOwn(t *testing.T) {
-	if got := plan([]item{{"big", 20 * mib}, {"s", 10}}, 9*mib, PackMaxObjects); !eqPlans(got, [][]string{{"big20971520"}, {"s10"}}) {
-		t.Fatal(got)
-	}
-}
-
-func TestPlanPacks_NeverPutsOneKeyInAPackTwice_AndKeepsWritesToOneKeyInOrder(t *testing.T) {
-	items := []item{{"k", 10}, {"x", 10}, {"k", 20}, {"y", 10}, {"k", 30}}
-	if got := plan(items, PackTargetBytes, PackMaxObjects); !eqPlans(got, [][]string{{"k10", "x10", "y10"}, {"k20"}, {"k30"}}) {
-		t.Fatal(got)
-	}
-	// A write to a key that doesn't fit holds back a later write to the same key that would: the later one never
-	// lands first.
-	held := []item{{"a", 10}, {"k", 20 * mib}, {"k", 10}}
-	if got := plan(held, 9*mib, PackMaxObjects); !eqPlans(got, [][]string{{"a10"}, {"k20971520"}, {"k10"}}) {
-		t.Fatal(got)
-	}
-}
-
-func TestPlanPacks_PlansNothingForNothing(t *testing.T) {
-	if got := PlanPacks([]item{}, func(item) int64 { return 0 }, func(item) string { return "" }, PackTargetBytes, PackMaxObjects); len(got) != 0 {
-		t.Fatal(got)
-	}
-}
+// Section 28's planner and timing rule are tested in packing_test.go, against the shared vectors.
 
 func TestPackedSize_IsTheNeedlesAndTWS1Bytes(t *testing.T) {
 	if got, want := PackedSize([]int64{0, 70_000}), 2*tws1.NeedleHeaderSize+tws1.StoredSize(0)+tws1.StoredSize(70_000); got != want {
@@ -453,4 +394,53 @@ func TestProgress_AddsUpAndReportsOneCallAtATime(t *testing.T) {
 	}
 	var none *Progress
 	none.Add(5) // a nil progress reports nothing
+}
+
+func TestScaledTimeout_SignAndCommitGrowWithTheObjects(t *testing.T) {
+	// Sign: the client's 60 s up to about 130,000 objects, then 3 x (1 s + 140 us an object).
+	for _, c := range []struct {
+		objects int
+		want    time.Duration
+	}{{1, time.Minute}, {10000, time.Minute}, {137070, 3 * (time.Second + 137070*140*time.Microsecond)},
+		{140000, 61800 * time.Millisecond}} {
+		if got := ScaledTimeout(c.objects, SignPerObject, time.Minute, 0); got != c.want {
+			t.Errorf("sign, %d objects: %s, want %s", c.objects, got, c.want)
+		}
+	}
+	// Commit: 70 s covers the server's cap of 140,000 (3 x 6.6 s); only a larger cap would raise it.
+	if got := ScaledTimeout(140000, CommitPerObject, 70*time.Second, 0); got != 70*time.Second {
+		t.Errorf("commit at 140,000: %s", got)
+	}
+	if got := ScaledTimeout(1_000_000, CommitPerObject, 70*time.Second, 0); got != 123*time.Second {
+		t.Errorf("commit at 1,000,000: %s", got)
+	}
+	// A client timeout longer than the scaled one stands.
+	if got := ScaledTimeout(140000, SignPerObject, 5*time.Minute, 0); got != 5*time.Minute {
+		t.Errorf("a longer client timeout: %s", got)
+	}
+}
+
+func TestCallTimeout_ALargeBodyOnASlowLinkAddsItsSendingTime(t *testing.T) {
+	u := NewUploads(nil, Options{Timeout: time.Minute}, UploadSettings{})
+	body := map[string]any{"x": strings.Repeat("a", 4<<20)} // 4 MiB + 8 bytes of JSON
+	n := float64(4<<20 + 8)
+	server := 3 * (time.Second + 1000*SignPerObject)
+	// Before anything is measured: its time at 64 KiB/s (64 s), past the client's 60 s.
+	if got, want := u.callTimeout(1000, SignPerObject, time.Minute, body), server+time.Duration(n/65536*float64(time.Second)); got != want {
+		t.Fatalf("unmeasured: %s, want %s", got, want)
+	}
+	// Measured at 10 kB/s: twice its time at that speed, about 14 minutes.
+	u.Speed.Set(10000)
+	if got, want := u.callTimeout(1000, SignPerObject, time.Minute, body), server+time.Duration(2*n/10000*float64(time.Second)); got != want {
+		t.Fatalf("slow: %s, want %s", got, want)
+	}
+	// A fast link: the server's time decides, and the client's timeout is the floor.
+	u.Speed.Set(100 << 20)
+	if got := u.callTimeout(1000, SignPerObject, time.Minute, body); got != time.Minute {
+		t.Fatalf("fast: %s", got)
+	}
+	// No body (commit): the server's time only.
+	if got := u.callTimeout(140000, CommitPerObject, 70*time.Second, nil); got != 70*time.Second {
+		t.Fatalf("commit: %s", got)
+	}
 }

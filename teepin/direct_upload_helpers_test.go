@@ -34,15 +34,20 @@ const (
 )
 
 // testSizes are the engine's sizes shrunk as the Python and Node tests shrink them: 128 KiB parts, a 256 KiB pack
-// limit, 1 MiB packs.
+// limit. A pack's own sizes are section 28's defaults (Uploads.Limits).
 var testSizes = direct.Sizes{
 	PartRules:         direct.PartRules{DefaultBytes: 128 * kib, MinBytes: 64 * kib, MaxParts: 3000, StreamBytes: 128 * kib},
 	PackObjectLimit:   256 * kib,
-	PackTarget:        1 << 20,
-	PackMinTarget:     64 * kib,
-	PackMaxObjects:    1000,
 	StreamConcurrency: 4,
 }
+
+// oneFileAPack are pack limits that put each file in its own pack (a floor of one byte, a ceiling of two): for tests
+// that need several packs from a few small files.
+var oneFileAPack = func() direct.PackLimits {
+	l := direct.DefaultLimits
+	l.Floor, l.Ceiling = 1, 2
+	return l
+}()
 
 func TestMain(m *testing.M) {
 	if cfg := os.Getenv(childEnv); cfg != "" {
@@ -67,6 +72,8 @@ type childConfig struct {
 	// Speed fixes the measured speed (bytes per second) with a request budget of SpeedBudget; 0 measures.
 	Speed       float64       `json:"speed"`
 	SpeedBudget time.Duration `json:"speed_budget"`
+	// Limits replaces the built-in pack limits (section 28) when set.
+	Limits *direct.PackLimits `json:"limits"`
 }
 
 // uploadChild runs UploadFiles against the parent's fakes and exits as a crash would (os.Exit: no deferred cleanup,
@@ -82,6 +89,9 @@ func uploadChild(raw string) int {
 	c.sleep = func(ctx context.Context, d time.Duration) error { return ctx.Err() }
 	up := c.Storage.uploads()
 	up.Sizes = cfg.Sizes
+	if cfg.Limits != nil {
+		up.Limits = *cfg.Limits
+	}
 	if cfg.Speed > 0 {
 		up.Speed.SetBudget(cfg.SpeedBudget)
 		up.Speed.Set(cfg.Speed)

@@ -76,16 +76,21 @@ func TestSlow_ARunsLaterPacksTakeTheSpeedMeasuredByThen(t *testing.T) {
 	e, c := newUploads(t)
 	c = e.client(Config{UploadConcurrency: 1})
 	up := c.Storage.uploads()
+	l := direct.DefaultLimits
+	l.Floor, l.Ceiling = 512*kib, 1<<20 // section 28's rules, smaller
+	up.Limits = l
 	up.Speed.SetBudget(time.Second)
 	var once sync.Once
 	up.Hooks.BeforeSend = func(string) { once.Do(func() { up.Speed.Set(100 * kib) }) }
-	files := e.writeFiles(39, 30*kib, "f") // at full speed: 33 files, then 6
+	// At full speed the first pack takes 33 files (to the 1 MiB ceiling); the 27 left are over the floor, so no tail.
+	// Then the speed drops: 100 KiB in a request, three files a pack.
+	files := e.writeFiles(60, 30*kib, "f")
 	res, err := c.Storage.UploadFiles(ctx, "photos", toUpload(files), nil)
 	if err != nil || !allSaved(res) {
 		t.Fatalf("%v %s", err, errorsOf(res))
 	}
-	if n := e.packs(""); n != 3 { // 33, then 3 and 3
-		t.Fatalf("%d packs, want 3", n)
+	if n := e.packs(""); n != 10 { // 33, then nine of 3
+		t.Fatalf("%d packs, want 10", n)
 	}
 	e.assertSavedOnce(files)
 }
@@ -102,7 +107,9 @@ func TestSlow_ShrinksPutObjectsSharedPacks(t *testing.T) {
 			if c.speed > 0 {
 				// A target under every object: none share, where at full speed they do.
 				slow(cl, c.speed)
-				up.Sizes.PackMinTarget = 1
+				old := direct.SlowMin
+				direct.SlowMin = 1
+				t.Cleanup(func() { direct.SlowMin = old })
 			}
 			up.Limit = direct.NewAdaptiveLimit(1, 1)
 			e.f.Network.Do(func() { e.f.Network.Delay = 50 * time.Millisecond })
@@ -316,8 +323,8 @@ func TestSlow_AColdStartOfTimeoutsShrinksTheNextRequest(t *testing.T) {
 		t.Fatalf("%v", bps)
 	}
 	up.Speed.SetBudget(time.Second)
-	if got := up.PackTarget(); got >= up.Sizes.PackTarget {
-		t.Fatalf("pack target %d", got)
+	if got, slow := up.Limits.AtSpeed(up.Speed.Link().RequestBytes()); got.Ceiling >= direct.DefaultPackCeiling || !slow {
+		t.Fatalf("pack limits at the measured speed: %+v", got)
 	}
 }
 
