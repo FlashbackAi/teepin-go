@@ -11,6 +11,7 @@ import (
 	"iter"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,7 +41,9 @@ type StorageService struct {
 	engine  *direct.Reads // direct storage's reads, made at the first one
 
 	uploadsMu sync.Mutex
-	up        *direct.Uploads // direct storage's uploads, made at the first one
+	up        *direct.Uploads // direct storage's uploads: the process's shared engine (28.23), taken at the first one
+	hold      *uploadHold     // the client's hold on it, nil for an engine of its own
+	collected runtime.Cleanup // lets go of hold if the client is garbage collected unclosed
 
 	downloadsMu sync.Mutex
 	dl          *direct.Downloads // batch downloads, made at the first one

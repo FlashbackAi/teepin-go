@@ -660,7 +660,7 @@ func TestFaults_TheRestOfTheMatrixEndsSavedExactlyOnce(t *testing.T) {
 		},
 		"PUT bad digest": func(e *upEnv, c *Client) { e.f.Network.Do(func() { e.f.Network.BadDigest["PUT"] = 1 }) },
 		"PUT unsent": func(e *upEnv, c *Client) {
-			c.httpClient.Transport = &unsentOnce{inner: c.httpClient.Transport}
+			uploadsHTTP(c).Transport = &unsentOnce{inner: uploadsHTTP(c).Transport}
 		},
 		"signature about to expire": func(e *upEnv, c *Client) {
 			var asked atomic.Bool
@@ -1212,7 +1212,7 @@ func TestCancel_StopsEveryGoroutineBeforeItReturnsAndNothingIsSentAfter(t *testi
 	files := slowRun(e, c, 6)
 	e.f.Network.Do(func() { e.f.Network.Delay = 2 * time.Second })
 	tr := newTracked()
-	c.httpClient.Transport = tr
+	uploadsHTTP(c).Transport = tr
 	cctx, cancel := context.WithCancel(ctx)
 	errc := make(chan error, 1)
 	go func() {

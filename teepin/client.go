@@ -55,6 +55,8 @@ type Client struct {
 	timeout    time.Duration
 	maxRetries int
 	sleep      func(context.Context, time.Duration) error // replaced in tests
+	// ownHTTP is set when Config.HTTPClient was given: the client's uploads then keep an engine of their own (28.23).
+	ownHTTP bool
 
 	// Direct storage (Config's fields of the same names, resolved).
 	keyCacheTTL       time.Duration // 0 keeps no key
@@ -89,6 +91,11 @@ type Config struct {
 	// HTTPClient sends the requests. The default keeps enough connections
 	// open for parallel transfers and has no overall timeout, which would cut
 	// off a large transfer; Timeout bounds the other calls instead.
+	//
+	// Clients in one process with the same key, address and upload settings
+	// share one upload queue, so small objects saved through a client per
+	// goroutine still go together in full packs. A client given its own
+	// HTTPClient keeps a queue of its own.
 	HTTPClient *http.Client
 
 	// Timeout bounds one API call that is not a transfer. Zero means the
@@ -174,6 +181,7 @@ func NewClient(config Config) *Client {
 	if config.BaseURL == "" {
 		config.BaseURL = DefaultBaseURL
 	}
+	ownHTTP := config.HTTPClient != nil
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{Transport: defaultTransport()}
 	}
@@ -199,6 +207,7 @@ func NewClient(config Config) *Client {
 		timeout:    config.Timeout,
 		maxRetries: config.MaxRetries,
 		sleep:      sleepCtx,
+		ownHTTP:    ownHTTP,
 		stateDir:   config.StateDir,
 	}
 	switch {
@@ -229,8 +238,10 @@ func NewClient(config Config) *Client {
 // BaseURL is the API address the client talks to.
 func (c *Client) BaseURL() string { return c.baseURL }
 
-// Close zeroes the data keys storage reads keep in memory (Config.KeyCacheTTL).
-// The client still works afterwards: later reads fetch their keys again.
+// Close zeroes the data keys storage reads keep in memory (Config.KeyCacheTTL),
+// and lets go of the upload engine, which other clients in this process may
+// still share (28.23): their saves go on. The client still works afterwards:
+// later calls take what they need again.
 func (c *Client) Close() error {
 	c.Storage.close()
 	return nil

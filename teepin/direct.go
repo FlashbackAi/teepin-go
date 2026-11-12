@@ -10,6 +10,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,20 +109,29 @@ func (s *StorageService) reads() *direct.Reads {
 	return s.engine
 }
 
-// uploads is the client's upload engine, made at the first direct upload.
+// uploads is the client's upload engine, taken at the first direct upload: the one this process's clients with the
+// same key, address and upload settings share (28.23).
 func (s *StorageService) uploads() *direct.Uploads {
 	s.uploadsMu.Lock()
 	defer s.uploadsMu.Unlock()
 	if s.up == nil {
-		c := s.client
-		s.up = direct.NewUploads(directAPI{c}, direct.Options{
-			MaxRetries: c.maxRetries,
-			Timeout:    c.timeout,
-			Sleep:      func(ctx context.Context, d time.Duration) error { return c.sleep(ctx, d) },
-			Backoff:    backoff,
-		}, direct.UploadSettings{Wait: c.uploadWait, Concurrency: c.uploadConcurrency, StateDir: c.stateDir})
+		up, hold := holdUploads(s.client)
+		s.up, s.hold = up, hold
+		if hold != nil {
+			s.collected = runtime.AddCleanup(s, (*uploadHold).release, hold)
+		}
 	}
 	return s.up
+}
+
+// uploadEngine is an upload engine sending through c.
+func uploadEngine(c *Client) *direct.Uploads {
+	return direct.NewUploads(directAPI{c}, direct.Options{
+		MaxRetries: c.maxRetries,
+		Timeout:    c.timeout,
+		Sleep:      func(ctx context.Context, d time.Duration) error { return c.sleep(ctx, d) },
+		Backoff:    backoff,
+	}, direct.UploadSettings{Wait: c.uploadWait, Concurrency: c.uploadConcurrency, StateDir: c.stateDir})
 }
 
 // downloads is the client's batch downloads, made at the first one, on its read engine (sharing its key cache).
@@ -145,12 +155,23 @@ func objectFrom(o *direct.Object) *Object {
 		Backend: o.Backend, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, UploadedAt: o.UploadedAt}
 }
 
-// close zeroes the data keys the read engine keeps.
+// close zeroes the data keys the read engine keeps, and lets go of the shared upload engine: another client's saves go
+// on, and the engine closes with its last client.
 func (s *StorageService) close() {
 	s.readsMu.Lock()
-	defer s.readsMu.Unlock()
 	if s.engine != nil {
 		s.engine.Close()
+	}
+	s.readsMu.Unlock()
+	s.uploadsMu.Lock()
+	hold := s.hold
+	if hold != nil {
+		s.collected.Stop()
+		s.up, s.hold = nil, nil
+	}
+	s.uploadsMu.Unlock()
+	if hold != nil {
+		hold.release()
 	}
 }
 

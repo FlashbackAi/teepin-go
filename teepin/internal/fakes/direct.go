@@ -155,6 +155,8 @@ type Pack struct {
 	UnderFloor string
 	Client     string
 	Packed     int64
+	// Auth is the Authorization header that reserved it (the shared-engine tests: one key per pack).
+	Auth string
 	// Released is set when the client gave the reservation up (section 28.23).
 	Released bool
 }
@@ -562,7 +564,8 @@ func (d *Direct) reserve(ex *exchange, bucket string) *reply {
 				IfMatch: stripQuotes(str(o["if_match"]))})
 		}
 		p := &Pack{ID: newUUID(), Key: "p/" + b32(), Bucket: bucket, Slots: slots, Digest: digest, Status: "reserved",
-			Expires: d.after(d.ReserveTTL), UnderFloor: underFloor, Client: ex.header["x-teepin-client"], Packed: packed}
+			Expires: d.after(d.ReserveTTL), UnderFloor: underFloor, Client: ex.header["x-teepin-client"], Packed: packed,
+			Auth: ex.header["authorization"]}
 		d.Packs[p.ID] = p
 		d.packIdem[idem] = [2]string{digest, p.ID}
 		out = d.reservation(p)

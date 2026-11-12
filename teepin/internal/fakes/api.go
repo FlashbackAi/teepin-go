@@ -18,8 +18,11 @@ import (
 	"time"
 )
 
-// APIKey is the only API key the fake API accepts.
+// APIKey is the API key the fake API accepts, with OtherKey.
 const APIKey = "tpk_test"
+
+// OtherKey is a second key on the same account: the shared-engine tests (28.23) check two keys never share a pack.
+const OtherKey = "tpk_test_other"
 
 // MinPartSize is the old path's smallest part but the last.
 const MinPartSize = 5 << 20
@@ -350,7 +353,7 @@ func (a *API) answer(ex *exchange, canned *Canned, failing bool) (rep *reply) {
 		return jsonReply(canned.Status, body, canned.Header)
 	case failing:
 		return apiError(http.StatusServiceUnavailable, "storage_busy", map[string]string{"Retry-After": "1"}, nil)
-	case ex.header["authorization"] != "Bearer "+APIKey:
+	case ex.header["authorization"] != "Bearer "+APIKey && ex.header["authorization"] != "Bearer "+OtherKey:
 		return apiError(http.StatusUnauthorized, "unauthorized", nil, nil)
 	case ex.path == "/v1/storage/hold":
 		return jsonReply(http.StatusOK, map[string]any{"held": false}, nil)

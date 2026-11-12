@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,6 +158,18 @@ func (e *upEnv) client(cfg Config) *Client {
 	}
 	c.Storage.uploads().Sizes = testSizes
 	return c
+}
+
+// uploadsHTTP is the HTTP client c's uploads go out through: the shared engine's own client's (28.23), or c's own for
+// an engine of its own. Tests that wrap the transport wrap this one.
+func uploadsHTTP(c *Client) *http.Client {
+	c.Storage.uploads()
+	c.Storage.uploadsMu.Lock()
+	defer c.Storage.uploadsMu.Unlock()
+	if h := c.Storage.hold; h != nil && h.entry != nil {
+		return h.entry.client.httpClient
+	}
+	return c.httpClient
 }
 
 func (e *upEnv) slept() []time.Duration {

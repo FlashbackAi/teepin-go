@@ -640,8 +640,8 @@ func TestStream_KeepsAtMostConcurrencyPartsInFlightAndHoldsTwoMore(t *testing.T)
 					}
 				}
 			}
-			flight := &inFlight{inner: c.httpClient.Transport}
-			c.httpClient.Transport = flight
+			flight := &inFlight{inner: uploadsHTTP(c).Transport}
+			uploadsHTTP(c).Transport = flight
 			data := randomData(12 * 128 * kib)
 			if _, err := c.Storage.UploadStream(ctx, "photos", "s", stream(data), &UploadOptions{Concurrency: conc}); err != nil {
 				t.Fatal(err)
@@ -682,8 +682,8 @@ func TestStream_SendsFourPartsAtOnceUnlessTold(t *testing.T) {
 	e.f.Network.Do(func() { e.f.Network.Delay = 50 * time.Millisecond })
 	// The adaptive limit starts at 4 too: let it allow more, so only the stream's own default holds it at 4.
 	c.Storage.uploads().Limit = direct.NewAdaptiveLimit(32, 32)
-	flight := &inFlight{inner: c.httpClient.Transport}
-	c.httpClient.Transport = flight
+	flight := &inFlight{inner: uploadsHTTP(c).Transport}
+	uploadsHTTP(c).Transport = flight
 	if _, err := c.Storage.UploadStream(ctx, "photos", "s", stream(randomData(12*128*kib)), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -768,7 +768,7 @@ func TestStream_ZeroesItsDataKeyOnceItIsWrapped(t *testing.T) {
 	}
 	var zeroAtFirstPart atomic.Bool
 	var once sync.Once
-	c.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	uploadsHTTP(c).Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Query().Get("partNumber") != "" {
 			once.Do(func() { zeroAtFirstPart.Store(isZeroKey(key)) })
 		}
@@ -884,7 +884,7 @@ func TestStream_ItsMemoryIsItsPartsInFlightAndThreeMore(t *testing.T) {
 	for _, conc := range []int{1, 2, 4} {
 		t.Run(fmt.Sprint(conc), func(t *testing.T) {
 			_, c := newUploads(t)
-			c.httpClient.Transport = discardParts{inner: c.httpClient.Transport}
+			uploadsHTTP(c).Transport = discardParts{inner: uploadsHTTP(c).Transport}
 			runtime.GC()
 			var ms runtime.MemStats
 			runtime.ReadMemStats(&ms)
