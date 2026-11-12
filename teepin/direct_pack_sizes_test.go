@@ -48,7 +48,8 @@ func TestPackSizes_ALoneSaveGoesAtOnceAsALeftoverNamingTheSDK(t *testing.T) {
 	if _, err := c.Storage.PutObject(ctx, "photos", "k", strings.NewReader("bytes"), 5, nil); err != nil {
 		t.Fatal(err)
 	}
-	// Nothing else is arriving, so it can't reach the floor: it goes at once, never waiting out the 5 s limit.
+	// Nothing else is arriving, so it can't reach the floor: it goes once observed (300 ms, 28.25), never waiting out
+	// the 5 s limit.
 	if d := time.Since(took); d > 3*time.Second {
 		t.Fatalf("took %s", d)
 	}

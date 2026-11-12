@@ -120,7 +120,8 @@ func TestPut_SharesPacksBetweenCallsWaitingAtOnce(t *testing.T) {
 		}
 	}
 	e.assertSavedOnce(files)
-	if n := e.packs(""); n >= 30 || n < 2 {
+	// 28.25: calls waiting at once are seen together within the observe time, so they share one pack or a few.
+	if n := e.packs(""); n >= 30 || n < 1 {
 		t.Fatalf("%d packs for 30 puts", n)
 	}
 }
@@ -268,6 +269,10 @@ func TestPut_FailsAtOnceWithNoWait(t *testing.T) {
 	var su *StorageUnavailableError
 	if !errors.As(err, &su) {
 		t.Fatalf("%v", err)
+	}
+	// It failed at the storage network, after its observe time (28.25), not in the queue.
+	if puts := e.f.Network.HitsOf("PUT"); puts == 0 {
+		t.Fatalf("no PUT was tried: %v", err)
 	}
 	for _, d := range e.slept() {
 		if d >= time.Second {
@@ -470,6 +475,7 @@ func TestPut_AFreedSlotGoesToAWaitingPutBeforeARunsNextPack(t *testing.T) {
 	e, _ := newUploads(t)
 	c := e.client(Config{UploadWait: 1000 * time.Hour})
 	up := c.Storage.uploads()
+	up.Limits.Observe = 0 // the put's pack would go at once: past its observe time (28.25), it waits only for a slot
 	for up.Limit.TryAcquire() {
 	}
 	errc := make(chan error, 1)

@@ -10,10 +10,15 @@ package direct
 //   - PackLimits: the sizes and timings, built in and sent by the server with each reservation (28.15).
 //   - PlanPack: which waiting items the next pack takes (28.3, 28.17).
 //   - Arrivals: the running totals of one bucket's waiting saves, so the timing rule decides without planning.
-//   - Decide: when a save's pack goes (28.4, 28.17).
+//   - Decide: when a save's pack goes (28.4, 28.17, 28.25).
+//   - InFlight: the saves' packs in flight and when each is expected back, whose callers will very likely save again
+//     (28.25 point 2).
+//   - Schedule: one dispatch's decisions for every bucket, oldest first (28.17's driver, without its slots and memory).
 
 import (
 	"encoding/json"
+	"slices"
+	"sort"
 	"time"
 )
 
@@ -29,6 +34,14 @@ const (
 	DefaultPackWait   = 5 * time.Second
 	DefaultRateWindow = time.Second
 	DefaultSettle     = 200 * time.Millisecond
+	// DefaultObserve is how long a pack under the floor waits before it may go as a leftover early (28.25 point 1):
+	// within it, a burst's arrivals land in the rate window. The server may send 0 to MaxObserveMs.
+	DefaultObserve = 300 * time.Millisecond
+	MaxObserveMs   = 2000
+	// CommitUsualStart is a commit's usual time until any is measured; CommitSamples how many of the last ones its
+	// median takes (28.25 point 2).
+	CommitUsualStart = 1500 * time.Millisecond
+	CommitSamples    = 8
 	// RequestOverhead is a reserve body's bytes besides its objects, with room to spare.
 	RequestOverhead = 512
 	// MemoryCap is the pack bytes in flight per client (28.2): 16 full packs.
@@ -68,12 +81,13 @@ type PackLimits struct {
 	MaxObjects, MaxPackObjects int
 	MaxRequest                 int64
 	Wait, Window, Settle       time.Duration
+	Observe                    time.Duration
 }
 
 // DefaultLimits are the limits a client starts with, until the server sends its own (tests replace them).
 var DefaultLimits = PackLimits{Floor: DefaultPackFloor, Ceiling: DefaultPackCeiling, MaxObjects: DefaultMaxObjects,
 	MaxPackObjects: DefaultMaxPackObjects, MaxRequest: DefaultMaxRequest, Wait: DefaultPackWait,
-	Window: DefaultRateWindow, Settle: DefaultSettle}
+	Window: DefaultRateWindow, Settle: DefaultSettle, Observe: DefaultObserve}
 
 // RequestBudget is the bytes a reserve body's objects may take.
 func (l PackLimits) RequestBudget() int64 { return max(0, l.MaxRequest-RequestOverhead) }
@@ -119,10 +133,26 @@ func LimitsFromJSON(raw json.RawMessage) (PackLimits, bool) {
 			return PackLimits{}, false
 		}
 	}
+	// observe_ms (28.25) is optional: a server before it sends none, and its other limits still hold.
+	observe := int64(DefaultObserve / time.Millisecond)
+	if r, ok := d["observe_ms"]; ok && string(r) != "null" {
+		if len(r) == 0 || r[0] == '"' {
+			return PackLimits{}, false
+		}
+		var n json.Number
+		if json.Unmarshal(r, &n) != nil {
+			return PackLimits{}, false
+		}
+		i, err := n.Int64()
+		if err != nil || i < 0 || i > MaxObserveMs {
+			return PackLimits{}, false
+		}
+		observe = i
+	}
 	return PackLimits{Floor: floor, Ceiling: ceiling, MaxObjects: int(v["max_objects"]),
 		MaxPackObjects: int(v["max_pack_objects"]), MaxRequest: v["max_request_bytes"],
 		Wait: time.Duration(v["wait_ms"]) * time.Millisecond, Window: time.Duration(v["rate_window_ms"]) * time.Millisecond,
-		Settle: time.Duration(v["settle_ms"]) * time.Millisecond}, true
+		Settle: time.Duration(v["settle_ms"]) * time.Millisecond, Observe: time.Duration(observe) * time.Millisecond}, true
 }
 
 // AtSpeed is l at the measured speed (28.7): requestBytes is what one request carries in 240 s (negative before
@@ -158,6 +188,13 @@ type Plan[T any] struct {
 //     another), the pack takes it all, within MaxPackObjects and the request budget.
 func PlanPack[T any](items []T, storedOf func(T) int64, keyOf func(T) string, requestOf func(T) int64, l PackLimits,
 	tail bool) Plan[T] {
+	return PlanPackCapped(items, storedOf, keyOf, requestOf, l, tail, -1)
+}
+
+// PlanPackCapped is PlanPack with a cap on the tail: with tailCap at 0 or more (a save's remnant, 28.25), the pack
+// takes its tail only while it stays within that many stored bytes.
+func PlanPackCapped[T any](items []T, storedOf func(T) int64, keyOf func(T) string, requestOf func(T) int64,
+	l PackLimits, tail bool, tailCap int64) Plan[T] {
 	var p Plan[T]
 	keys := map[string]bool{}
 	restKeys := map[string]bool{}
@@ -195,7 +232,8 @@ func PlanPack[T any](items []T, storedOf func(T) int64, keyOf func(T) string, re
 			size += storedOf(it)
 			req += requestOf(it)
 		}
-		if size < l.Floor && len(p.Pack)+len(p.Rest) <= l.MaxPackObjects && p.Request+req <= budget {
+		if size < l.Floor && len(p.Pack)+len(p.Rest) <= l.MaxPackObjects && p.Request+req <= budget &&
+			(tailCap < 0 || p.Stored+size <= tailCap) {
 			p.Pack = append(p.Pack, p.Rest...)
 			p.Stored += size
 			p.Request += req
@@ -243,12 +281,22 @@ type Arrival struct {
 	Stored int64
 }
 
-// Decide is when a save's pack goes (28.4, 28.17). Times are durations on the caller's own monotonic clock. waiting is
-// the stored bytes that can join the next pack; oldest and last the first and latest arrival among them; arrivals the
-// saves that arrived ready to join, without the oldest waiting file's own (28.22: it says nothing about what comes
-// next). A pack that would send with no free slot is idle: it keeps filling until one frees.
+// Decide is when a save's pack goes (28.4, 28.17, 28.25). Times are durations on the caller's own monotonic clock.
+// waiting is the stored bytes that can join the next pack; oldest and last the first and latest arrival among them;
+// arrivals the saves that arrived ready to join, without the oldest waiting file's own (28.22: it says nothing about
+// what comes next). A pack that would send with no free slot is idle: it keeps filling until one frees.
+//
+// A pack under the floor goes at its time limit. Before it, it goes early only when nothing says a batch is forming
+// (28.25):
+//   - not before its oldest file has waited l.Observe, so a burst's arrivals reach the rate window first; unless a
+//     later write to one of its keys waits behind it (only its going lets that write go: 75 saves to one key still go
+//     one by one at once);
+//   - coming: the stored bytes of this bucket's packs in flight expected back before the time limit count as
+//     arriving, as their callers will very likely save again;
+//   - not while contested: another pack waits for a slot or settles (a full or ready one, or a run's next pack),
+//     which a leftover must not take.
 func Decide(state string, waiting int64, oldest, last time.Duration, arrivals []Arrival, now time.Duration,
-	l PackLimits, slotFree bool) Decision {
+	l PackLimits, slotFree bool, coming int64, contested, behind bool) Decision {
 	send := func(reason string) Decision {
 		if slotFree {
 			return Decision{Kind: DecideSend, Reason: reason}
@@ -271,6 +319,10 @@ func Decide(state string, waiting int64, oldest, last time.Duration, arrivals []
 	if left <= 0 {
 		return send(ReasonLeftover)
 	}
+	at := oldest + l.Wait
+	if !behind && now < oldest+l.Observe {
+		return Decision{Kind: DecideWait, At: min(at, oldest+l.Observe)}
+	}
 	var recent int64
 	first := time.Duration(-1)
 	for _, a := range arrivals {
@@ -285,10 +337,9 @@ func Decide(state string, waiting int64, oldest, last time.Duration, arrivals []
 	if l.Window > 0 {
 		rate = float64(recent) / l.Window.Seconds()
 	}
-	if float64(waiting)+rate*left.Seconds() < float64(l.Floor) {
+	if !contested && float64(waiting)+float64(coming)+rate*left.Seconds() < float64(l.Floor) {
 		return send(ReasonLeftover)
 	}
-	at := oldest + l.Wait
 	if first >= 0 {
 		at = min(at, first+l.Window)
 	}
@@ -308,6 +359,8 @@ type Arrivals[T comparable] struct {
 	// Waiting and Request are the stored and reserve-request bytes that can join; Last the latest arrival among them.
 	Waiting, Request int64
 	Last             time.Duration
+	// Blocked is how many waiting saves can't join the next pack (an earlier write to their key waits).
+	Blocked int
 }
 
 type arrival struct {
@@ -345,6 +398,8 @@ func (a *Arrivals[T]) Add(item T, key string, stored, request int64, now time.Du
 		a.Request += request
 		a.Last = now
 		a.window = append(a.window, windowed{at: now, stored: stored, seq: e.seq})
+	} else {
+		a.Blocked++
 	}
 }
 
@@ -366,6 +421,8 @@ func (a *Arrivals[T]) Remove(items []T) {
 		if e.joins {
 			a.Waiting -= e.stored
 			a.Request -= e.request
+		} else {
+			a.Blocked--
 		}
 		if len(same) == 0 {
 			delete(a.byKey, e.key)
@@ -375,6 +432,7 @@ func (a *Arrivals[T]) Remove(items []T) {
 		if e.joins {
 			if next := a.entries[same[0]]; !next.joins {
 				next.joins = true
+				a.Blocked--
 				a.Waiting += next.stored
 				a.Request += next.request
 			}
@@ -434,4 +492,301 @@ func (a *Arrivals[T]) RecentArrivals(now, window time.Duration) []Arrival {
 		}
 	}
 	return out
+}
+
+// Behind reports whether a later write to a key in the next pack waits behind it.
+func (a *Arrivals[T]) Behind() bool { return a.Blocked > 0 }
+
+// ArrivedAt is when a waiting save arrived.
+func (a *Arrivals[T]) ArrivedAt(item T) time.Duration { return a.entries[item].at }
+
+// StoredOf is a waiting save's stored bytes.
+func (a *Arrivals[T]) StoredOf(item T) int64 { return a.entries[item].stored }
+
+// ArrivedSince is the stored bytes of the saves that arrived able to join at t or later (within the rate window kept),
+// whether still waiting or not.
+func (a *Arrivals[T]) ArrivedSince(t time.Duration) int64 {
+	var n int64
+	for _, w := range a.window {
+		if w.at >= t {
+			n += w.stored
+		}
+	}
+	return n
+}
+
+// InFlight is the saves' packs in flight, and when each is expected back (28.25 point 2): the callers blocked in a
+// pack will very likely save again once it commits, so its bytes count as coming arrivals.
+//
+// Expected back, by phase: not uploading yet, now plus its sending time plus a commit's usual time; uploading, from
+// the upload's start; sent, the send plus a commit's usual time (the median of the last CommitSamples commits,
+// CommitUsualStart until one is measured). Before any speed is measured, every pack counts as coming: at worst a save
+// waits the time limit.
+//
+// A pack that committed keeps counting for a grace time (the observe time), less the bytes that arrived since it came
+// back: its callers are on their way back, and between its commit and their saves it is neither in flight nor
+// waiting (a small group waiting for it would otherwise go alone just before them).
+//
+// Not safe for concurrent use: the driver holds its lock. Times are passed in.
+type InFlight struct {
+	packs    map[string]*flight
+	commits  []time.Duration
+	returned []returnedPack
+}
+
+type flight struct {
+	bucket         string
+	stored         int64
+	up, sent       time.Duration
+	hasUp, hasSent bool
+}
+
+type returnedPack struct {
+	bucket string
+	stored int64
+	at     time.Duration
+}
+
+// NewInFlight is no packs in flight.
+func NewInFlight() *InFlight { return &InFlight{packs: map[string]*flight{}} }
+
+// Len is how many packs are in flight.
+func (f *InFlight) Len() int { return len(f.packs) }
+
+// Has reports whether key is in flight.
+func (f *InFlight) Has(key string) bool { _, ok := f.packs[key]; return ok }
+
+// Add is a save's pack sent on its way.
+func (f *InFlight) Add(key, bucket string, stored int64) {
+	f.packs[key] = &flight{bucket: bucket, stored: stored}
+}
+
+// Uploading is its upload starting (again: a pack sent once more starts over).
+func (f *InFlight) Uploading(key string, now time.Duration) {
+	if e := f.packs[key]; e != nil {
+		e.up, e.hasUp, e.hasSent = now, true, false
+	}
+}
+
+// Sent is its upload ended: its commit is being checked.
+func (f *InFlight) Sent(key string, now time.Duration) {
+	if e := f.packs[key]; e != nil {
+		e.sent, e.hasSent = now, true
+	}
+}
+
+// Remove is it leaving: a committed pack's time since its send is a commit's time, and it keeps counting for its grace.
+func (f *InFlight) Remove(key string, now time.Duration, committed bool) {
+	e := f.packs[key]
+	if e == nil {
+		return
+	}
+	delete(f.packs, key)
+	if !committed {
+		return
+	}
+	if e.hasSent {
+		f.commits = append(f.commits, max(0, now-e.sent))
+		if len(f.commits) > CommitSamples {
+			f.commits = f.commits[len(f.commits)-CommitSamples:]
+		}
+	}
+	f.returned = append(f.returned, returnedPack{bucket: e.bucket, stored: e.stored, at: now})
+}
+
+// CommitUsual is a commit's usual time: the median of the last ones measured.
+func (f *InFlight) CommitUsual() time.Duration {
+	if len(f.commits) == 0 {
+		return CommitUsualStart
+	}
+	s := slices.Clone(f.commits)
+	slices.Sort(s)
+	if n := len(s); n%2 == 1 {
+		return s[n/2]
+	}
+	return (s[len(s)/2-1] + s[len(s)/2]) / 2
+}
+
+// Expected is when the pack is expected back, at bytesPerSecond (0 before any speed is measured: now).
+func (f *InFlight) Expected(key string, now time.Duration, bytesPerSecond float64) time.Duration {
+	e := f.packs[key]
+	usual := f.CommitUsual()
+	if e.hasSent {
+		return e.sent + usual
+	}
+	if bytesPerSecond <= 0 {
+		return now
+	}
+	from := now
+	if e.hasUp {
+		from = e.up
+	}
+	return from + time.Duration(float64(e.stored)/bytesPerSecond*float64(time.Second)) + usual
+}
+
+// Coming is the stored bytes of bucket's packs expected back by by, and of those that came back within grace of now
+// less what arrived since (arrivedSince(t): the stored bytes that arrived at t or later; nil for none).
+func (f *InFlight) Coming(bucket string, by, now time.Duration, bytesPerSecond float64, grace time.Duration,
+	arrivedSince func(time.Duration) int64) int64 {
+	kept := f.returned[:0]
+	for _, r := range f.returned {
+		if now < r.at+grace {
+			kept = append(kept, r)
+		}
+	}
+	f.returned = kept
+	var ahead int64
+	for k, e := range f.packs {
+		if e.bucket == bucket && f.Expected(k, now, bytesPerSecond) <= by {
+			ahead += e.stored
+		}
+	}
+	var back int64
+	since, seen := time.Duration(0), false
+	for _, r := range f.returned {
+		if r.bucket == bucket {
+			back += r.stored
+			if !seen || r.at < since {
+				since, seen = r.at, true
+			}
+		}
+	}
+	if seen {
+		var arrived int64
+		if arrivedSince != nil {
+			arrived = arrivedSince(since)
+		}
+		ahead += max(0, back-arrived)
+	}
+	return ahead
+}
+
+// AbsorbCap is the most stored bytes a save's pack may reach by taking its remnant (28.25): the ceiling plus the
+// floor, never past what the measured speed sends in one request's time (28.7; requestBytes negative before any is
+// measured), nor the pack cap. l are the server's limits, before the speed's clamp.
+func AbsorbCap(l PackLimits, requestBytes int64) int64 {
+	c := min(l.Ceiling+l.Floor, MaxPackBytes)
+	if requestBytes < 0 {
+		return c
+	}
+	return min(c, requestBytes)
+}
+
+// RemnantAlone reports whether what a full save's pack turns away is a remnant with nothing coming for it (28.25): its
+// rest stored bytes, plus coming, plus its own arrivals in the window (without its oldest's) at their rate for the
+// time its oldest has left, stay under the floor. The batch that is going is no evidence for it: a steady stream
+// still turns files away. Decided when the pack goes, never after a wait.
+func RemnantAlone(rest int64, oldest time.Duration, arrivals []Arrival, coming int64, now time.Duration,
+	l PackLimits) bool {
+	if rest <= 0 || rest >= l.Floor {
+		return false
+	}
+	var recent int64
+	for _, a := range arrivals {
+		if a.At > now-l.Window {
+			recent += a.Stored
+		}
+	}
+	rate := 0.0
+	if l.Window > 0 {
+		rate = float64(recent) / l.Window.Seconds()
+	}
+	left := max(0, oldest+l.Wait-now)
+	return float64(rest)+float64(coming)+rate*left.Seconds() < float64(l.Floor)
+}
+
+// Choice is a pack the timing rule sends now: its bucket, plan and decision.
+type Choice[T comparable] struct {
+	Bucket   string
+	Plan     Plan[T]
+	Decision Decision
+}
+
+// Schedule is one dispatch (28.17's driver, 28.25): every bucket's decision, oldest bucket first. It returns the packs
+// that may go now, in that order (the driver gives each a slot and memory, or holds it), and the earliest time a
+// waiting one next needs a decision (false when none waits).
+//
+// A bucket's pack is planned only when its totals are at the floor, over the request budget, or it goes (28.22 point
+// 6). A bucket under the floor is contested while another bucket's totals are at the floor or over the budget (a
+// full, ready or request-limited pack waits or settles), or a run's next pack waits for a slot.
+//
+// planOf(arrivals, tailCap) plans a bucket's next pack, with its tail taken within tailCap bytes when tailCap is 0 or
+// more. A full pack that goes takes its remnant (RemnantAlone) within absorbCap (AbsorbCap; 0 takes none).
+func Schedule[T comparable](queues map[string]*Arrivals[T], now time.Duration, l PackLimits,
+	planOf func(a *Arrivals[T], tailCap int64) Plan[T], comingOf func(bucket string, by time.Duration) int64,
+	runsWaiting bool, absorbCap int64) ([]Choice[T], time.Duration, bool) {
+	type bucketAt struct {
+		name string
+		at   time.Duration
+	}
+	var order []bucketAt
+	for b, a := range queues {
+		if _, at, ok := a.Oldest(); ok {
+			order = append(order, bucketAt{b, at})
+		}
+	}
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].at != order[j].at {
+			return order[i].at < order[j].at
+		}
+		return order[i].name < order[j].name
+	})
+	pending := map[string]bool{}
+	for _, b := range order {
+		a := queues[b.name]
+		if a.Waiting >= l.Floor || a.Request > l.RequestBudget() {
+			pending[b.name] = true
+		}
+	}
+	var out []Choice[T]
+	var next time.Duration
+	hasNext := false
+	for _, b := range order {
+		bucket, a, oldest := b.name, queues[b.name], b.at
+		recent := a.RecentArrivals(now, l.Window)
+		coming := comingOf(bucket, oldest+l.Wait)
+		contested := runsWaiting
+		for other := range pending {
+			if other != bucket {
+				contested = true
+			}
+		}
+		behind := a.Behind()
+		var p Plan[T]
+		planned := false
+		var d Decision
+		if !pending[bucket] {
+			d = Decide(PackUnder, a.Waiting, oldest, a.Last, recent, now, l, true, coming, contested, behind)
+		} else {
+			p, planned = planOf(a, -1), true
+			d = Decide(p.State, p.Stored, oldest, a.Last, recent, now, l, true, coming, contested, behind)
+		}
+		if d.Kind == DecideSend && !planned {
+			p = planOf(a, -1)
+			if p.State != PackUnder { // decided again from the planned pack
+				d = Decide(p.State, p.Stored, oldest, a.Last, recent, now, l, true, coming, contested, behind)
+			}
+		}
+		if d.Kind == DecideWait {
+			if !hasNext || d.At < next {
+				next, hasNext = d.At, true
+			}
+			continue
+		}
+		if d.Kind == DecideSend && p.State == PackFull && len(p.Rest) > 0 && absorbCap > 0 {
+			first := p.Rest[0]
+			since := a.ArrivedAt(first)
+			own := make([]Arrival, 0, len(p.Rest)-1)
+			for _, it := range p.Rest[1:] {
+				own = append(own, Arrival{At: a.ArrivedAt(it), Stored: a.StoredOf(it)})
+			}
+			if RemnantAlone(a.Waiting-p.Stored, since, own, comingOf(bucket, since+l.Wait), now, l) {
+				if whole := planOf(a, absorbCap); len(whole.Rest) == 0 && whole.Stored >= l.Floor {
+					p = whole
+				}
+			}
+		}
+		out = append(out, Choice[T]{Bucket: bucket, Plan: p, Decision: d})
+	}
+	return out, next, hasNext
 }

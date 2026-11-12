@@ -384,6 +384,7 @@ type AdaptiveLimit struct {
 	inFlight int
 	priority bool
 	wake     chan struct{} // closed, and replaced, to wake every waiter
+	waiters  int           // Acquire calls waiting for a slot
 }
 
 // NewAdaptiveLimit starts at start, never passing ceiling (each at least 1).
@@ -435,13 +436,28 @@ func (l *AdaptiveLimit) Acquire(ctx context.Context) error {
 			return nil
 		}
 		wake := l.wake
+		l.waiters++
 		l.mu.Unlock()
+		var err error
 		select {
 		case <-wake:
 		case <-ctx.Done():
-			return ctx.Err()
+			err = ctx.Err()
+		}
+		l.mu.Lock()
+		l.waiters--
+		l.mu.Unlock()
+		if err != nil {
+			return err
 		}
 	}
+}
+
+// RunsWaiting reports whether a run's next pack (or part) waits for a slot (28.25: a leftover doesn't take it first).
+func (l *AdaptiveLimit) RunsWaiting() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.waiters > 0
 }
 
 // SetPriority is set while PutObject calls wait; turning it off wakes the run's waiting Acquire calls.

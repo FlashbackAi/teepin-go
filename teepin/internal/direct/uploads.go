@@ -16,7 +16,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -153,6 +152,9 @@ type UploadHooks struct {
 	// StreamSealed runs as a stream has sealed a part, before its plaintext is let go: the moment it holds the most
 	// (the parts in flight, the plaintext sealed and its ciphertext, and the next part read). The reader waits for it.
 	StreamSealed func()
+	// Flight is told of each phase of a PutObject pack in flight (section 28.25): "add", "uploading", "sent" and
+	// "remove" (committed says whether it went into its grace time).
+	Flight func(phase, id string, committed bool)
 }
 
 // Uploads is direct uploads for one client: the account key, PutObject's shared packs, large uploads and streams,
@@ -195,7 +197,8 @@ type Uploads struct {
 	waiting     map[string]*Arrivals[*packItem] // PutObject's waiting files, per bucket (section 28.17)
 	next        time.Duration                   // when the timing rule next needs a decision, if hasNext
 	hasNext     bool
-	inflight    int64 // PutObject's pack bytes in flight, against MemoryCap
+	inflight    int64     // PutObject's pack bytes in flight, against MemoryCap
+	flights     *InFlight // PutObject's packs in flight and when each is expected back (section 28.25)
 	slotWaiters []*signal
 }
 
@@ -211,7 +214,28 @@ func NewUploads(api API, opts Options, s UploadSettings) *Uploads {
 		pins: journal.NewPins(s.StateDir), Limit: NewAdaptiveLimit(StartConcurrency, max(1, s.Concurrency)),
 		Budget: NewRetryBudget(0.1, 10), Sizes: DefaultSizes, CleanupCap: CleanupCap, Speed: NewSpeedMeter(),
 		PutTimeoutFloor: PutTimeoutFloor, PutTimeoutSpeed: PutTimeoutSpeed, Limits: DefaultLimits, Clock: monotonic(),
-		waiting: map[string]*Arrivals[*packItem]{}}
+		waiting: map[string]*Arrivals[*packItem]{}, flights: NewInFlight()}
+}
+
+// flight tells the packs in flight of one of a pack's phases (section 28.25); a run's packs are not followed, so
+// their phases change nothing.
+func (u *Uploads) flight(phase string, p *pack, committed bool) {
+	u.mu.Lock()
+	now := u.Clock()
+	followed := u.flights.Has(p.id)
+	switch phase {
+	case "uploading":
+		u.flights.Uploading(p.id, now)
+	case "sent":
+		u.flights.Sent(p.id, p.sentAt)
+	case "remove":
+		u.flights.Remove(p.id, now, committed)
+	}
+	h := u.Hooks.Flight
+	u.mu.Unlock()
+	if h != nil && followed {
+		h(phase, p.id, committed)
+	}
 }
 
 // limits are the pack limits now (the server may change them with any reservation).
@@ -1074,6 +1098,7 @@ func (u *Uploads) send(ctx context.Context, p *pack) error {
 		return p.store.savePack(p)
 	}
 	p.state = "uploading"
+	u.flight("uploading", p, false)
 	if err := p.store.savePack(p); err != nil {
 		return err
 	}
@@ -1085,6 +1110,7 @@ func (u *Uploads) send(ctx context.Context, p *pack) error {
 	switch o := OutcomeOf(err); o {
 	case Sent, Unknown:
 		p.sentAt, p.hasSent, p.sentUnknown, p.verifyWaited = u.Clock(), true, o == Unknown, 0
+		u.flight("sent", p, false)
 		p.state = "sent"
 		if o == Unknown {
 			p.state = "unknown"
@@ -1376,7 +1402,9 @@ func (u *Uploads) Put(ctx context.Context, bucket, key string, data []byte, w Wr
 	}
 	a.Add(it, it.key, it.stored(), it.request(), u.Clock())
 	u.mu.Unlock()
-	deadline := time.Now().Add(u.uploadWait)
+	// The observe time (28.25) doesn't count against the upload wait: a lone save sits in it before its pack may go,
+	// and with an upload wait of zero it would otherwise fail while slots are free.
+	deadline := time.Now().Add(u.uploadWait + u.limits().Observe)
 	leave := func() bool {
 		u.mu.Lock()
 		defer u.mu.Unlock()
@@ -1464,9 +1492,14 @@ func (u *Uploads) dispatch() {
 				it.wake.fire() // its caller may be waiting: its file has a pack now
 			}
 		}
-		u.mu.Unlock()
 		p := newPack(bucket, plan.Pack, memoryStore{}, "")
 		p.underFloor, p.inflight = reason, plan.Stored
+		u.flights.Add(p.id, bucket, plan.Stored)
+		h := u.Hooks.Flight
+		u.mu.Unlock()
+		if h != nil {
+			h("add", p.id, false)
+		}
 		go u.runShared(p)
 	}
 }
@@ -1475,51 +1508,25 @@ func (u *Uploads) dispatch() {
 // and the priority.
 func (u *Uploads) choose() (string, Plan[*packItem], string, bool) {
 	now := u.Clock()
-	limits, slow := u.Limits.AtSpeed(u.requestBytes())
-	u.hasNext = false
+	requestBytes := u.requestBytes()
+	limits, slow := u.Limits.AtSpeed(requestBytes)
+	bps, _ := u.Speed.BytesPerSecond()
+	absorbCap := int64(0)
+	if !slow {
+		absorbCap = AbsorbCap(u.Limits, requestBytes)
+	}
+	choices, next, hasNext := Schedule(u.waiting, now, limits,
+		func(a *Arrivals[*packItem], tailCap int64) Plan[*packItem] {
+			return PlanPackCapped(a.Items(), itemStored, itemKey, itemRequest, limits, tailCap >= 0, tailCap)
+		},
+		func(bucket string, by time.Duration) int64 {
+			return u.flights.Coming(bucket, by, now, bps, limits.Observe, u.waiting[bucket].ArrivedSince)
+		},
+		u.Limit.RunsWaiting(), absorbCap)
+	u.next, u.hasNext = next, hasNext
 	blocked := false
-	buckets := make([]string, 0, len(u.waiting))
-	for b := range u.waiting {
-		buckets = append(buckets, b)
-	}
-	sort.Slice(buckets, func(i, j int) bool {
-		_, ai, _ := u.waiting[buckets[i]].Oldest()
-		_, aj, _ := u.waiting[buckets[j]].Oldest()
-		return ai < aj
-	})
-	plan := func(a *Arrivals[*packItem]) Plan[*packItem] {
-		return PlanPack(a.Items(), itemStored, itemKey, itemRequest, limits, false)
-	}
-	for _, bucket := range buckets {
-		a := u.waiting[bucket]
-		_, oldest, ok := a.Oldest()
-		if !ok {
-			continue
-		}
-		recent := a.RecentArrivals(now, limits.Window)
-		var p Plan[*packItem]
-		planned := false
-		var d Decision
-		if a.Waiting < limits.Floor && a.Request <= limits.RequestBudget() {
-			// The totals say the pack is under the floor: no planning unless it goes (section 28.22, point 6).
-			d = Decide(PackUnder, a.Waiting, oldest, a.Last, recent, now, limits, true)
-		} else {
-			p, planned = plan(a), true
-			d = Decide(p.State, p.Stored, oldest, a.Last, recent, now, limits, true)
-		}
-		if d.Kind == DecideSend && !planned {
-			p, planned = plan(a), true
-			if p.State != PackUnder { // decided again from the planned pack
-				d = Decide(p.State, p.Stored, oldest, a.Last, recent, now, limits, true)
-			}
-		}
-		if d.Kind == DecideWait {
-			if !u.hasNext || d.At < u.next {
-				u.next, u.hasNext = d.At, true
-			}
-			continue
-		}
-		if u.inflight > 0 && u.inflight+p.Stored > MemoryCap {
+	for _, c := range choices {
+		if u.inflight > 0 && u.inflight+c.Plan.Stored > MemoryCap {
 			blocked = true
 			continue
 		}
@@ -1527,13 +1534,14 @@ func (u *Uploads) choose() (string, Plan[*packItem], string, bool) {
 			blocked = true
 			continue
 		}
-		a.Remove(p.Pack)
+		a := u.waiting[c.Bucket]
+		a.Remove(c.Plan.Pack)
 		if a.Len() == 0 {
-			delete(u.waiting, bucket)
+			delete(u.waiting, c.Bucket)
 		}
-		u.inflight += p.Stored
+		u.inflight += c.Plan.Stored
 		u.Limit.SetPriority(blocked)
-		return bucket, p, u.reasonFor(p, d.Reason, slow), true
+		return c.Bucket, c.Plan, u.reasonFor(c.Plan, c.Decision.Reason, slow), true
 	}
 	u.Limit.SetPriority(blocked)
 	return "", Plan[*packItem]{}, "", false
@@ -1560,6 +1568,10 @@ func (u *Uploads) reasonFor(p Plan[*packItem], reason string, slow bool) string 
 func (u *Uploads) runShared(p *pack) {
 	outcome := OutcomeFailed
 	defer func() {
+		// Out of the packs in flight, into its grace time (28.25), before its slot is released. Its callers were woken
+		// as each item was delivered: one that saved again meanwhile counted twice until here, which can only hold a
+		// pack, and the release below has it decided again.
+		u.flight("remove", p, p.state == "committed")
 		for _, it := range p.items {
 			it.finish()
 		}

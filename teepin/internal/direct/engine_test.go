@@ -444,3 +444,33 @@ func TestCallTimeout_ALargeBodyOnASlowLinkAddsItsSendingTime(t *testing.T) {
 		t.Fatalf("commit: %s", got)
 	}
 }
+
+// 28.25 point 3: a run's Acquire waiting for a slot is what keeps an early leftover from taking it.
+func TestAdaptiveLimitRunsWaiting(t *testing.T) {
+	l := NewAdaptiveLimit(1, 1)
+	if !l.TryAcquire() || l.RunsWaiting() {
+		t.Fatal("a free slot, no one waiting")
+	}
+	done := make(chan error, 1)
+	go func() { done <- l.Acquire(context.Background()) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for !l.RunsWaiting() {
+		if time.Now().After(deadline) {
+			t.Fatal("the waiting Acquire isn't seen")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	l.Release(OutcomeOK)
+	if err := <-done; err != nil || l.RunsWaiting() {
+		t.Fatalf("%v %v", err, l.RunsWaiting())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { done <- l.Acquire(ctx) }()
+	for !l.RunsWaiting() {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) || l.RunsWaiting() {
+		t.Fatalf("cancelled: %v %v", err, l.RunsWaiting())
+	}
+}
