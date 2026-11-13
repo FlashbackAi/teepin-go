@@ -36,7 +36,7 @@ import (
 )
 
 // Version is this SDK's version, sent in the User-Agent and as X-Teepin-Client.
-const Version = "0.4.0"
+const Version = "0.4.1"
 
 const (
 	// DefaultBaseURL is the public API.

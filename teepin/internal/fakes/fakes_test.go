@@ -704,11 +704,17 @@ func TestFakes_AStreamsUploadKeepsTheFiveRules(t *testing.T) {
 func TestFakes_AnUploadsPreconditionAtComplete_AndExpiredUploadsAbandoned(t *testing.T) {
 	f := Start(t)
 	f.API.Do(func() { f.Direct.MinPartBytes = 1 })
-	f.API.PutObject("photos", "taken", []byte("old"), "")
 	data := random(1000)
 	_, sum := hexSum(data)
 	spec := map[string]any{"direct": true, "idempotency_key": "c1", "key": "taken", "size": len(data), "part_size": seg, "sha256": sum, "if_none_match": true}
 	up := call(t, f, http.MethodPost, "/buckets/photos/uploads", spec).JSON()
+	// The object appears while the parts go up: the create passed, complete refuses.
+	f.API.PutObject("photos", "taken", []byte("old"), "")
+	// A new create over it is refused at once, before any byte moves.
+	again := map[string]any{"direct": true, "idempotency_key": "c2", "key": "taken", "size": len(data), "part_size": seg, "sha256": sum, "if_none_match": true}
+	if c := call(t, f, http.MethodPost, "/buckets/photos/uploads", again); c.Status != http.StatusPreconditionFailed || c.Code() != "precondition_failed" {
+		t.Fatalf("create over an object: %d %s", c.Status, c.Body)
+	}
 	base := "/buckets/photos/uploads/" + up["upload_id"].(string)
 	dek, _ := tws1.NewDataKey()
 	stream, _ := tws1.NewStream(dek, int64(len(data)), seg)

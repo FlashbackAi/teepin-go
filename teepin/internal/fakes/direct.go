@@ -1057,6 +1057,14 @@ func (d *Direct) createUpload(bucket string, req map[string]any) *reply {
 		}
 		out = d.uploadJSON(u)
 	} else {
+		// A condition the key's object already fails is refused before any byte moves, as the server does; complete
+		// checks it again.
+		if cur := d.api.Buckets[bucket][str(req["key"])]; cur != nil {
+			im := stripQuotes(str(req["if_match"]))
+			if truthy(req["if_none_match"]) || (im != "" && im != "*" && im != cur.ETag()) {
+				return apiError(http.StatusPreconditionFailed, "precondition_failed", nil, nil)
+			}
+		}
 		if len(d.OpenUploads()) >= d.MaxOpenUploads {
 			return apiError(http.StatusTooManyRequests, "too_many_pending_uploads", map[string]string{"Retry-After": "30"}, nil)
 		}

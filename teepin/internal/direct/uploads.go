@@ -1402,9 +1402,10 @@ func (u *Uploads) Put(ctx context.Context, bucket, key string, data []byte, w Wr
 	}
 	a.Add(it, it.key, it.stored(), it.request(), u.Clock())
 	u.mu.Unlock()
-	// The observe time (28.25) doesn't count against the upload wait: a lone save sits in it before its pack may go,
-	// and with an upload wait of zero it would otherwise fail while slots are free.
-	deadline := time.Now().Add(u.uploadWait + u.limits().Observe)
+	// The timing rule's holds (28.25) don't count against the upload wait: the observe time, which a lone save sits in
+	// before its pack may go, and a batch forming for up to the time limit. With an upload wait of zero a save would
+	// otherwise fail while storage is up.
+	deadline := time.Now().Add(u.uploadWait + u.limits().TimingHold())
 	leave := func() bool {
 		u.mu.Lock()
 		defer u.mu.Unlock()

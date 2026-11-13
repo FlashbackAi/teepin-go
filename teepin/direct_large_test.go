@@ -331,6 +331,25 @@ func TestLarge_AFailedPreconditionCancelsNothingTwice(t *testing.T) {
 	if e.f.API.HitsOf("DELETE upload") > 1 || e.openUploads() != 0 {
 		t.Fatalf("%d cancels, %d open", e.f.API.HitsOf("DELETE upload"), e.openUploads())
 	}
+	// Refused at create (the 0.4.1 server): no part signed or sent, and nothing to cancel.
+	if s, d := e.f.API.HitsOf("POST part sign"), e.f.API.HitsOf("DELETE upload"); s != 0 || d != 0 {
+		t.Fatalf("%d part signs and %d cancels after a refused create", s, d)
+	}
+}
+
+func TestLarge_APreconditionFailedAtCompleteStillFailsCleanly(t *testing.T) {
+	// The object appeared while the parts went up: the create passed, and complete refuses (the server's final check).
+	e, c := newUploads(t)
+	e.f.API.Canned["POST complete"] = []fakes.Canned{{Status: 412, Body: map[string]any{"error": "precondition failed",
+		"code": "precondition_failed"}}}
+	data := randomData(largeSize)
+	_, err := c.Storage.PutObject(ctx, "photos", "big", bytes.NewReader(data), int64(len(data)), &PutObjectOptions{IfNoneMatch: true})
+	if !IsPreconditionFailed(err) {
+		t.Fatalf("%v", err)
+	}
+	if e.openUploads() != 0 {
+		t.Fatalf("%d open", e.openUploads())
+	}
 }
 
 func TestLarge_AFileThatChangedAfterItWasQueuedFailsBeforeAnyUpload(t *testing.T) {

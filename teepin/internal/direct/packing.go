@@ -89,6 +89,10 @@ var DefaultLimits = PackLimits{Floor: DefaultPackFloor, Ceiling: DefaultPackCeil
 	MaxPackObjects: DefaultMaxPackObjects, MaxRequest: DefaultMaxRequest, Wait: DefaultPackWait,
 	Window: DefaultRateWindow, Settle: DefaultSettle, Observe: DefaultObserve}
 
+// TimingHold is the longest the timing rule holds a save before its pack may go: the time limit, or the observe time
+// when that is longer. A save's upload wait starts after it (0.4.1).
+func (l PackLimits) TimingHold() time.Duration { return max(l.Wait, l.Observe) }
+
 // RequestBudget is the bytes a reserve body's objects may take.
 func (l PackLimits) RequestBudget() int64 { return max(0, l.MaxRequest-RequestOverhead) }
 
